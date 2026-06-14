@@ -594,12 +594,10 @@ notice = "You are not on break.";
 const currentBreakMs = Date.now() - Number(shift.breakStartedAt);
 const newTotalBreakMs = Number(shift.totalBreakMs || 0) + currentBreakMs;
 
-```
   await run("UPDATE active_shifts SET status = ?, breakStartedAt = ?, totalBreakMs = ? WHERE userId = ?", ["active", null, newTotalBreakMs, interaction.user.id]);
   await setOnDuty(interaction.guild, interaction.user.id, true);
   notice = "Break ended.";
 }
-```
 
 }
 
@@ -609,7 +607,6 @@ notice = "You are not on shift.";
 } else {
 let totalBreakMs = Number(shift.totalBreakMs || 0);
 
-```
   if (shift.status === "break" && shift.breakStartedAt) {
     totalBreakMs += Date.now() - Number(shift.breakStartedAt);
   }
@@ -623,7 +620,6 @@ let totalBreakMs = Number(shift.totalBreakMs || 0);
   await setOnDuty(interaction.guild, interaction.user.id, false);
   notice = "Shift ended. Logged " + minutes + " minutes.";
 }
-```
 
 }
 
@@ -747,9 +743,7 @@ const list = rows.map(function (row) {
 return "<@&" + row.roleId + ">";
 }).join("\n");
 
-```
 return interaction.reply({ content: list || "No auto roles set.", ephemeral: true });
-```
 
 }
 }
@@ -765,12 +759,10 @@ if (sub === "add") {
 const permission = interaction.options.getString("permission");
 const role = interaction.options.getRole("role");
 
-```
 await run("INSERT OR IGNORE INTO permission_roles (permission, roleId) VALUES (?, ?)", [permission, role.id]);
 await loadPermissions();
 
 return interaction.reply({ content: "Added " + role.toString() + " to " + permission + ".", ephemeral: true });
-```
 
 }
 
@@ -778,12 +770,10 @@ if (sub === "remove") {
 const permission = interaction.options.getString("permission");
 const role = interaction.options.getRole("role");
 
-```
 await run("DELETE FROM permission_roles WHERE permission = ? AND roleId = ?", [permission, role.id]);
 await loadPermissions();
 
 return interaction.reply({ content: "Removed " + role.toString() + " from " + permission + ".", ephemeral: true });
-```
 
 }
 
@@ -791,7 +781,6 @@ if (sub === "list") {
 const rows = await all("SELECT permission, roleId FROM permission_roles ORDER BY permission");
 let text = "";
 
-```
 for (const key of ["staff", "mod", "admin", "high", "infract"]) {
   const roles = rows.filter(function (row) {
     return row.permission === key;
@@ -803,7 +792,6 @@ for (const key of ["staff", "mod", "admin", "high", "infract"]) {
 }
 
 return interaction.reply({ content: text, ephemeral: true });
-```
 
 }
 }
@@ -911,12 +899,10 @@ if (!targetMember) return interaction.reply({ content: "User is not in the serve
 if (!targetMember.moderatable) return interaction.reply({ content: "I cannot mute this user. Move my role higher and give me Moderate Members.", ephemeral: true });
 await targetMember.timeout(minutes * 60 * 1000, reason);
 
-```
 const item = await createCase("MUTE", target.id, interaction.user.id, reason, minutes + " minutes", null);
 const embed = caseEmbed(item);
 await sendLog(embed);
 return interaction.reply({ content: "Muted " + target.tag + " for " + minutes + " minutes. Case #" + item.caseNumber, embeds: [embed] });
-```
 
 }
 
@@ -971,7 +957,6 @@ try {
 await setupDatabase();
 await loadPermissions();
 
-```
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 await rest.put(
@@ -981,7 +966,6 @@ await rest.put(
 
 console.log("Logged in as " + client.user.tag);
 console.log("Commands deployed to guild " + GUILD_ID + " using this same bot.");
-```
 
 } catch (error) {
 console.error("Startup error:", error);
@@ -995,7 +979,6 @@ if (interaction.customId.startsWith("shift_")) return await handleShiftButton(in
 return;
 }
 
-```
 if (!interaction.isChatInputCommand()) return;
 
 const command = interaction.commandName;
@@ -1013,18 +996,15 @@ if (command === "leaderboard") return await handleLeaderboard(interaction, membe
 if (command === "warn" || command === "infract" || command === "kick" || command === "ban" || command === "mute" || command === "unmute") return await handleModeration(interaction, member, command);
 if (command === "case") return await handleCase(interaction, member);
 if (command === "history") return await handleHistory(interaction, member);
-```
 
 } catch (error) {
 console.error("Interaction error:", error);
 
-```
 if (!interaction.replied && !interaction.deferred) {
   return interaction.reply({ content: "Error running command. Check Railway logs.", ephemeral: true });
 }
 
 return interaction.followUp({ content: "Error running command. Check Railway logs.", ephemeral: true });
-```
 
 }
 });
