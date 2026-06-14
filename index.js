@@ -11,8 +11,6 @@ Routes,
 SlashCommandBuilder
 } = require("discord.js");
 
-const sqlite3 = require("sqlite3").verbose();
-
 const TOKEN = process.env.TOKEN;
 const GUILD_ID = process.env.GUILD_ID || "1514692669752999986";
 
@@ -22,71 +20,32 @@ process.exit(1);
 }
 
 const client = new Client({
-intents: [
-GatewayIntentBits.Guilds
-]
+intents: [GatewayIntentBits.Guilds]
 });
 
-const db = new sqlite3.Database("./erlc.db");
+const settings = {
+logsChannelId: null,
+onDutyRoleId: null,
+welcomeEnabled: false,
+welcomeChannelId: null,
+welcomeTitle: "Welcome to Sentinel Enforcement Authority",
+welcomeMessage: "Welcome {user} to {server}! You are member #{memberCount}.",
+welcomeImage: ""
+};
 
-function run(sql, params) {
-return new Promise((resolve, reject) => {
-db.run(sql, params || [], function (err) {
-if (err) reject(err);
-else resolve(this);
-});
-});
-}
+const permissionRoles = {
+staff: new Set(),
+mod: new Set(),
+admin: new Set(),
+high: new Set(),
+infract: new Set()
+};
 
-function get(sql, params) {
-return new Promise((resolve, reject) => {
-db.get(sql, params || [], function (err, row) {
-if (err) reject(err);
-else resolve(row);
-});
-});
-}
-
-function all(sql, params) {
-return new Promise((resolve, reject) => {
-db.all(sql, params || [], function (err, rows) {
-if (err) reject(err);
-else resolve(rows || []);
-});
-});
-}
-
-async function addColumnIfMissing(table, column, definition) {
-const columns = await all("PRAGMA table_info(" + table + ")");
-const names = columns.map(function (col) {
-return col.name;
-});
-
-if (!names.includes(column)) {
-await run("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
-}
-}
-
-async function setupDatabase() {
-await run("CREATE TABLE IF NOT EXISTS permission_roles (permission TEXT NOT NULL, roleId TEXT NOT NULL, UNIQUE(permission, roleId))");
-await run("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)");
-await run("CREATE TABLE IF NOT EXISTS autoroles (roleId TEXT PRIMARY KEY)");
-await run("CREATE TABLE IF NOT EXISTS cases (caseNumber INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, userId TEXT NOT NULL, officerId TEXT NOT NULL, reason TEXT NOT NULL, duration TEXT, createdAt INTEGER, arrestLocation TEXT, mugshotUrl TEXT)");
-
-await addColumnIfMissing("cases", "duration", "TEXT");
-await addColumnIfMissing("cases", "createdAt", "INTEGER");
-await addColumnIfMissing("cases", "arrestLocation", "TEXT");
-await addColumnIfMissing("cases", "mugshotUrl", "TEXT");
-
-await run("CREATE TABLE IF NOT EXISTS active_shifts (userId TEXT PRIMARY KEY, startedAt INTEGER NOT NULL, status TEXT DEFAULT 'active', breakStartedAt INTEGER, totalBreakMs INTEGER DEFAULT 0)");
-await addColumnIfMissing("active_shifts", "status", "TEXT DEFAULT 'active'");
-await addColumnIfMissing("active_shifts", "breakStartedAt", "INTEGER");
-await addColumnIfMissing("active_shifts", "totalBreakMs", "INTEGER DEFAULT 0");
-
-await run("CREATE TABLE IF NOT EXISTS shifts (userId TEXT NOT NULL, startedAt INTEGER, endedAt INTEGER, minutes INTEGER NOT NULL)");
-await addColumnIfMissing("shifts", "startedAt", "INTEGER");
-await addColumnIfMissing("shifts", "endedAt", "INTEGER");
-}
+const autoroles = new Set();
+const cases = [];
+const activeShifts = new Map();
+const completedShifts = [];
+let nextCaseNumber = 1;
 
 const permissionChoices = [
 { name: "staff", value: "staff" },
@@ -97,9 +56,7 @@ const permissionChoices = [
 ];
 
 const commands = [
-new SlashCommandBuilder()
-.setName("help")
-.setDescription("View bot commands"),
+new SlashCommandBuilder().setName("help").setDescription("View bot commands"),
 
 new SlashCommandBuilder()
 .setName("embed")
@@ -108,21 +65,11 @@ new SlashCommandBuilder()
 return sub
 .setName("send")
 .setDescription("Send a custom embed")
-.addChannelOption(function (option) {
-return option.setName("channel").setDescription("Channel to send the embed in").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("title").setDescription("Embed title").setRequired(true).setMaxLength(256);
-})
-.addStringOption(function (option) {
-return option.setName("description").setDescription("Embed description").setRequired(true).setMaxLength(4000);
-})
-.addStringOption(function (option) {
-return option
-.setName("color")
-.setDescription("Embed color")
-.setRequired(false)
-.addChoices(
+.addChannelOption(function (o) { return o.setName("channel").setDescription("Channel to send in").setRequired(true); })
+.addStringOption(function (o) { return o.setName("title").setDescription("Embed title").setRequired(true); })
+.addStringOption(function (o) { return o.setName("description").setDescription("Embed description").setRequired(true); })
+.addStringOption(function (o) {
+return o.setName("color").setDescription("Embed color").setRequired(false).addChoices(
 { name: "Black", value: "black" },
 { name: "Blue", value: "blue" },
 { name: "Green", value: "green" },
@@ -132,66 +79,40 @@ return option
 { name: "White", value: "white" }
 );
 })
-.addStringOption(function (option) {
-return option.setName("image").setDescription("Large image URL").setRequired(false);
-})
-.addStringOption(function (option) {
-return option.setName("thumbnail").setDescription("Small thumbnail image URL").setRequired(false);
-})
-.addStringOption(function (option) {
-return option.setName("footer").setDescription("Footer text").setRequired(false).setMaxLength(2048);
-});
+.addStringOption(function (o) { return o.setName("image").setDescription("Large image URL").setRequired(false); })
+.addStringOption(function (o) { return o.setName("thumbnail").setDescription("Thumbnail URL").setRequired(false); })
+.addStringOption(function (o) { return o.setName("footer").setDescription("Footer text").setRequired(false); });
 }),
 
 new SlashCommandBuilder()
 .setName("welcome")
-.setDescription("Manage the welcome system")
+.setDescription("Manage welcome messages")
 .addSubcommand(function (sub) {
 return sub
 .setName("set")
 .setDescription("Set the welcome channel and message")
-.addChannelOption(function (option) {
-return option.setName("channel").setDescription("Welcome channel").setRequired(true);
+.addChannelOption(function (o) { return o.setName("channel").setDescription("Welcome channel").setRequired(true); })
+.addStringOption(function (o) { return o.setName("title").setDescription("Welcome title").setRequired(false); })
+.addStringOption(function (o) { return o.setName("message").setDescription("Use {user}, {server}, {memberCount}").setRequired(false); })
+.addStringOption(function (o) { return o.setName("image").setDescription("Image URL").setRequired(false); });
 })
-.addStringOption(function (option) {
-return option.setName("title").setDescription("Welcome embed title").setRequired(false).setMaxLength(256);
-})
-.addStringOption(function (option) {
-return option.setName("message").setDescription("Use {user}, {server}, {memberCount}").setRequired(false).setMaxLength(4000);
-})
-.addStringOption(function (option) {
-return option.setName("image").setDescription("Optional image URL").setRequired(false);
-});
-})
-.addSubcommand(function (sub) {
-return sub.setName("off").setDescription("Turn off welcome messages");
-})
-.addSubcommand(function (sub) {
-return sub.setName("test").setDescription("Test the welcome message");
-}),
+.addSubcommand(function (sub) { return sub.setName("off").setDescription("Turn off welcome messages"); })
+.addSubcommand(function (sub) { return sub.setName("test").setDescription("Test welcome message"); }),
 
 new SlashCommandBuilder()
 .setName("autorole")
-.setDescription("Manage roles given when someone joins")
+.setDescription("Manage auto roles")
 .addSubcommand(function (sub) {
-return sub
-.setName("add")
-.setDescription("Add an auto-role")
-.addRoleOption(function (option) {
-return option.setName("role").setDescription("Role to give when someone joins").setRequired(true);
+return sub.setName("add").setDescription("Add auto role").addRoleOption(function (o) {
+return o.setName("role").setDescription("Role").setRequired(true);
 });
 })
 .addSubcommand(function (sub) {
-return sub
-.setName("remove")
-.setDescription("Remove an auto-role")
-.addRoleOption(function (option) {
-return option.setName("role").setDescription("Role to remove from auto-roles").setRequired(true);
+return sub.setName("remove").setDescription("Remove auto role").addRoleOption(function (o) {
+return o.setName("role").setDescription("Role").setRequired(true);
 });
 })
-.addSubcommand(function (sub) {
-return sub.setName("list").setDescription("List all auto-roles");
-}),
+.addSubcommand(function (sub) { return sub.setName("list").setDescription("List auto roles"); }),
 
 new SlashCommandBuilder()
 .setName("perm")
@@ -199,55 +120,37 @@ new SlashCommandBuilder()
 .addSubcommand(function (sub) {
 return sub
 .setName("add")
-.setDescription("Add a role to a permission level")
-.addStringOption(function (option) {
-return option.setName("permission").setDescription("Permission level").setRequired(true).addChoices.apply(option, permissionChoices);
-})
-.addRoleOption(function (option) {
-return option.setName("role").setDescription("Role to add").setRequired(true);
-});
+.setDescription("Add permission role")
+.addStringOption(function (o) { return o.setName("permission").setDescription("Permission").setRequired(true).addChoices.apply(o, permissionChoices); })
+.addRoleOption(function (o) { return o.setName("role").setDescription("Role").setRequired(true); });
 })
 .addSubcommand(function (sub) {
 return sub
 .setName("remove")
-.setDescription("Remove a role from a permission level")
-.addStringOption(function (option) {
-return option.setName("permission").setDescription("Permission level").setRequired(true).addChoices.apply(option, permissionChoices);
+.setDescription("Remove permission role")
+.addStringOption(function (o) { return o.setName("permission").setDescription("Permission").setRequired(true).addChoices.apply(o, permissionChoices); })
+.addRoleOption(function (o) { return o.setName("role").setDescription("Role").setRequired(true); });
 })
-.addRoleOption(function (option) {
-return option.setName("role").setDescription("Role to remove").setRequired(true);
-});
-})
-.addSubcommand(function (sub) {
-return sub.setName("list").setDescription("List permission roles");
-}),
+.addSubcommand(function (sub) { return sub.setName("list").setDescription("List permission roles"); }),
 
 new SlashCommandBuilder()
 .setName("config")
-.setDescription("Configure bot settings")
+.setDescription("Configure bot")
 .addSubcommand(function (sub) {
-return sub
-.setName("logs")
-.setDescription("Set the logs channel")
-.addChannelOption(function (option) {
-return option.setName("channel").setDescription("Channel for case logs").setRequired(true);
+return sub.setName("logs").setDescription("Set logs channel").addChannelOption(function (o) {
+return o.setName("channel").setDescription("Logs channel").setRequired(true);
 });
 })
 .addSubcommand(function (sub) {
-return sub
-.setName("onduty")
-.setDescription("Set the On-Duty role")
-.addRoleOption(function (option) {
-return option.setName("role").setDescription("Role to give while on duty").setRequired(true);
+return sub.setName("onduty").setDescription("Set On-Duty role").addRoleOption(function (o) {
+return o.setName("role").setDescription("On-Duty role").setRequired(true);
 });
 }),
 
 new SlashCommandBuilder()
 .setName("shift")
 .setDescription("Shift system")
-.addSubcommand(function (sub) {
-return sub.setName("manage").setDescription("Open the shift management panel");
-}),
+.addSubcommand(function (sub) { return sub.setName("manage").setDescription("Open shift panel"); }),
 
 new SlashCommandBuilder()
 .setName("log")
@@ -256,192 +159,52 @@ new SlashCommandBuilder()
 return sub
 .setName("arrest")
 .setDescription("Log an arrest")
-.addStringOption(function (option) {
-return option.setName("suspect_username").setDescription("Roblox username or suspect name").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("charges").setDescription("Charges for the arrest").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("arrest_location").setDescription("Where the arrest happened").setRequired(true);
-})
-.addAttachmentOption(function (option) {
-return option.setName("mugshot").setDescription("Upload a mugshot image").setRequired(false);
-});
+.addStringOption(function (o) { return o.setName("suspect_username").setDescription("Roblox username").setRequired(true); })
+.addStringOption(function (o) { return o.setName("charges").setDescription("Charges").setRequired(true); })
+.addStringOption(function (o) { return o.setName("arrest_location").setDescription("Location").setRequired(true); })
+.addAttachmentOption(function (o) { return o.setName("mugshot").setDescription("Mugshot image").setRequired(false); });
 }),
 
-new SlashCommandBuilder()
-.setName("leaderboard")
-.setDescription("View shift leaderboard"),
+new SlashCommandBuilder().setName("leaderboard").setDescription("View shift leaderboard"),
 
-new SlashCommandBuilder()
-.setName("warn")
-.setDescription("Warn a user")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to warn").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("warn").setDescription("Warn a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("infract")
-.setDescription("Create an infraction case")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to infract").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("infract").setDescription("Create an infraction")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("kick")
-.setDescription("Kick a user")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to kick").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("kick").setDescription("Kick a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("ban")
-.setDescription("Ban a user")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to ban").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("ban").setDescription("Ban a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("mute")
-.setDescription("Mute or timeout a user")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to mute").setRequired(true);
-})
-.addIntegerOption(function (option) {
-return option.setName("minutes").setDescription("Mute length in minutes").setRequired(false).setMinValue(1).setMaxValue(40320);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("mute").setDescription("Timeout a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addIntegerOption(function (o) { return o.setName("minutes").setDescription("Minutes").setRequired(false).setMinValue(1).setMaxValue(40320); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("unmute")
-.setDescription("Remove timeout from a user")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to unmute").setRequired(true);
-})
-.addStringOption(function (option) {
-return option.setName("reason").setDescription("Reason").setRequired(false);
-}),
+new SlashCommandBuilder().setName("unmute").setDescription("Remove timeout")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
-new SlashCommandBuilder()
-.setName("case")
-.setDescription("Look up a case")
-.addIntegerOption(function (option) {
-return option.setName("number").setDescription("Case number").setRequired(true);
-}),
+new SlashCommandBuilder().setName("case").setDescription("Look up case")
+.addIntegerOption(function (o) { return o.setName("number").setDescription("Case number").setRequired(true); }),
 
-new SlashCommandBuilder()
-.setName("history")
-.setDescription("View user disciplinary history")
-.addUserOption(function (option) {
-return option.setName("user").setDescription("User to check").setRequired(true);
-})
+new SlashCommandBuilder().setName("history").setDescription("View user history")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
 ].map(function (command) {
 return command.toJSON();
 });
 
-const LEVELS = {
-staff: 1,
-mod: 2,
-admin: 3,
-high: 4
-};
-
-const permissionCache = {
-staff: new Set(),
-mod: new Set(),
-admin: new Set(),
-high: new Set(),
-infract: new Set()
-};
-
-async function loadPermissions() {
-permissionCache.staff.clear();
-permissionCache.mod.clear();
-permissionCache.admin.clear();
-permissionCache.high.clear();
-permissionCache.infract.clear();
-
-const rows = await all("SELECT permission, roleId FROM permission_roles");
-
-for (const row of rows) {
-if (permissionCache[row.permission]) {
-permissionCache[row.permission].add(row.roleId);
-}
-}
-}
-
-function isDiscordAdmin(interaction, member) {
-if (interaction && interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-return true;
-}
-
-if (member && member.permissions && member.permissions.has(PermissionFlagsBits.Administrator)) {
-return true;
-}
-
+function isAdmin(interaction, member) {
+if (interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) return true;
+if (member && member.permissions && member.permissions.has(PermissionFlagsBits.Administrator)) return true;
 return false;
-}
-
-function getMemberLevel(member, interaction) {
-if (isDiscordAdmin(interaction, member)) {
-return LEVELS.high;
-}
-
-if (!member || !member.roles || !member.roles.cache) {
-return 0;
-}
-
-let level = 0;
-
-for (const role of member.roles.cache.values()) {
-if (permissionCache.high.has(role.id)) level = Math.max(level, LEVELS.high);
-if (permissionCache.admin.has(role.id)) level = Math.max(level, LEVELS.admin);
-if (permissionCache.mod.has(role.id)) level = Math.max(level, LEVELS.mod);
-if (permissionCache.staff.has(role.id)) level = Math.max(level, LEVELS.staff);
-}
-
-return level;
-}
-
-function hasLevel(member, levelName, interaction) {
-return getMemberLevel(member, interaction) >= LEVELS[levelName];
-}
-
-function hasSpecificPermission(member, permissionName, interaction) {
-if (isDiscordAdmin(interaction, member)) return true;
-
-if (!member || !member.roles || !member.roles.cache) {
-return false;
-}
-
-return member.roles.cache.some(function (role) {
-return permissionCache[permissionName] && permissionCache[permissionName].has(role.id);
-});
-}
-
-function canActOn(executorMember, targetMember, interaction) {
-const executorLevel = getMemberLevel(executorMember, interaction);
-const targetLevel = getMemberLevel(targetMember, null);
-
-if (executorLevel >= LEVELS.high) return true;
-if (targetLevel === 0) return executorLevel >= LEVELS.staff;
-
-return executorLevel > targetLevel;
 }
 
 async function getCommandMember(interaction) {
@@ -460,366 +223,163 @@ return null;
 }
 }
 
-async function setConfig(key, value) {
-await run("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key, value]);
+function memberLevel(member, interaction) {
+if (isAdmin(interaction, member)) return 4;
+if (!member || !member.roles || !member.roles.cache) return 0;
+
+let level = 0;
+for (const role of member.roles.cache.values()) {
+if (permissionRoles.staff.has(role.id)) level = Math.max(level, 1);
+if (permissionRoles.mod.has(role.id)) level = Math.max(level, 2);
+if (permissionRoles.admin.has(role.id)) level = Math.max(level, 3);
+if (permissionRoles.high.has(role.id)) level = Math.max(level, 4);
+}
+return level;
 }
 
-async function getConfig(key) {
-const row = await get("SELECT value FROM config WHERE key = ?", [key]);
-if (!row) return null;
-return row.value;
+function hasLevel(member, needed, interaction) {
+const levels = { staff: 1, mod: 2, admin: 3, high: 4 };
+return memberLevel(member, interaction) >= levels[needed];
 }
 
-async function getAutoRoles() {
-return await all("SELECT roleId FROM autoroles");
+function hasInfract(member, interaction) {
+if (isAdmin(interaction, member)) return true;
+if (!member || !member.roles || !member.roles.cache) return false;
+return member.roles.cache.some(function (role) {
+return permissionRoles.infract.has(role.id);
+});
 }
 
-async function addAutoRole(roleId) {
-const existing = await get("SELECT roleId FROM autoroles WHERE roleId = ?", [roleId]);
+function canAct(member, targetMember, interaction) {
+if (!targetMember) return true;
+return memberLevel(member, interaction) > memberLevel(targetMember, null) || memberLevel(member, interaction) >= 4;
+}
 
-if (existing) {
-return {
-ok: true,
-message: "That role is already an auto-role."
+function createCase(type, userId, officerId, reason, duration, extra) {
+const item = {
+caseNumber: nextCaseNumber,
+type: type,
+userId: userId,
+officerId: officerId,
+reason: reason || "No reason",
+duration: duration || null,
+createdAt: Date.now(),
+arrestLocation: extra && extra.arrestLocation ? extra.arrestLocation : null,
+mugshotUrl: extra && extra.mugshotUrl ? extra.mugshotUrl : null
 };
+nextCaseNumber += 1;
+cases.push(item);
+return item;
 }
 
-const roles = await getAutoRoles();
+function caseEmbed(item) {
+const userValue = item.type === "ARREST" ? item.userId : "<@" + item.userId + ">";
+const embed = new EmbedBuilder()
+.setTitle(item.type + " Case #" + item.caseNumber)
+.setColor(0x2b2d31)
+.addFields(
+{ name: "User", value: userValue, inline: true },
+{ name: "Officer", value: "<@" + item.officerId + ">", inline: true },
+{ name: "Reason", value: item.reason, inline: false }
+)
+.setFooter({ text: "Case Number: " + item.caseNumber })
+.setTimestamp();
 
-if (roles.length >= 5) {
-return {
-ok: false,
-message: "You can only have 5 auto-roles max."
-};
+if (item.duration) embed.addFields({ name: "Duration", value: item.duration, inline: true });
+if (item.arrestLocation) embed.addFields({ name: "Arrest Location", value: item.arrestLocation, inline: false });
+if (item.mugshotUrl) embed.setImage(item.mugshotUrl);
+return embed;
 }
 
-await run("INSERT INTO autoroles (roleId) VALUES (?)", [roleId]);
-
-return {
-ok: true,
-message: "Auto-role added."
-};
+async function sendLog(embed) {
+if (!settings.logsChannelId) return;
+const channel = await client.channels.fetch(settings.logsChannelId).catch(function () { return null; });
+if (channel) await channel.send({ embeds: [embed] }).catch(function () {});
 }
 
-async function removeAutoRole(roleId) {
-await run("DELETE FROM autoroles WHERE roleId = ?", [roleId]);
-
-return {
-ok: true,
-message: "Auto-role removed."
-};
-}
-
-function fillWelcomeText(text, member) {
-if (!text) return "";
-
+function fillWelcome(text, member) {
 return text
 .replaceAll("{user}", "<@" + member.id + ">")
 .replaceAll("{server}", member.guild.name)
 .replaceAll("{memberCount}", String(member.guild.memberCount));
 }
 
-async function sendWelcomeMessage(member) {
-const enabled = await getConfig("welcome_enabled");
-const channelId = await getConfig("welcome_channel_id");
-
-if (enabled !== "true" || !channelId) return;
-
-const title = await getConfig("welcome_title") || "Welcome to Sentinel Enforcement Authority";
-const message = await getConfig("welcome_message") || "Welcome {user} to {server}! You are member #{memberCount}.";
-const image = await getConfig("welcome_image");
-
-const channel = await member.guild.channels.fetch(channelId).catch(function () {
-return null;
-});
-
+async function sendWelcome(member) {
+if (!settings.welcomeEnabled || !settings.welcomeChannelId) return;
+const channel = await member.guild.channels.fetch(settings.welcomeChannelId).catch(function () { return null; });
 if (!channel || !channel.isTextBased()) return;
 
 const embed = new EmbedBuilder()
-.setTitle(fillWelcomeText(title, member))
-.setDescription(fillWelcomeText(message, member))
+.setTitle(fillWelcome(settings.welcomeTitle, member))
+.setDescription(fillWelcome(settings.welcomeMessage, member))
 .setColor(0x2b2d31)
 .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-.setFooter({ text: member.guild.name })
 .setTimestamp();
 
-if (image && image.startsWith("http")) {
-embed.setImage(image);
+if (settings.welcomeImage && settings.welcomeImage.startsWith("http")) embed.setImage(settings.welcomeImage);
+await channel.send({ content: "<@" + member.id + ">", embeds: [embed] }).catch(function () {});
 }
 
-await channel.send({
-content: "<@" + member.id + ">",
-embeds: [embed]
-}).catch(function () {});
-}
-
-async function sendLogEmbed(embed) {
-const channelId = await getConfig("logs_channel_id");
-if (!channelId) return;
-
-const channel = await client.channels.fetch(channelId).catch(function () {
-return null;
-});
-
-if (!channel) return;
-
-await channel.send({ embeds: [embed] }).catch(function () {});
-}
-
-async function getOnDutyRoleId() {
-return await getConfig("onduty_role_id");
-}
-
-async function addOnDutyRole(guild, userId) {
-const roleId = await getOnDutyRoleId();
-
-if (!roleId) {
-return {
-ok: false,
-message: "On-Duty role is not set. Use /config onduty role: @On-Duty."
-};
-}
-
-const member = await guild.members.fetch(userId).catch(function () {
-return null;
-});
-
-if (!member) {
-return {
-ok: false,
-message: "Could not find member."
-};
-}
-
-try {
-if (!member.roles.cache.has(roleId)) {
-await member.roles.add(roleId);
-}
-
-```
-return {
-  ok: true,
-  message: "On-Duty role added."
-};
-```
-
-} catch (error) {
-return {
-ok: false,
-message: "Could not add On-Duty role. Move the bot role above On-Duty and give it Manage Roles."
-};
-}
-}
-
-async function removeOnDutyRole(guild, userId) {
-const roleId = await getOnDutyRoleId();
-
-if (!roleId) {
-return {
-ok: false,
-message: "On-Duty role is not set."
-};
-}
-
-const member = await guild.members.fetch(userId).catch(function () {
-return null;
-});
-
-if (!member) {
-return {
-ok: false,
-message: "Could not find member."
-};
-}
-
-try {
-if (member.roles.cache.has(roleId)) {
-await member.roles.remove(roleId);
-}
-
-```
-return {
-  ok: true,
-  message: "On-Duty role removed."
-};
-```
-
-} catch (error) {
-return {
-ok: false,
-message: "Could not remove On-Duty role. Move the bot role above On-Duty and give it Manage Roles."
-};
-}
-}
-
-async function createCase(type, userId, officerId, reason, duration) {
-const result = await run("INSERT INTO cases (type, userId, officerId, reason, duration, createdAt) VALUES (?, ?, ?, ?, ?, ?)", [type, userId, officerId, reason, duration || null, Date.now()]);
-return result.lastID;
-}
-
-async function createArrestCase(suspectUsername, officerId, charges, arrestLocation, mugshotUrl) {
-const result = await run("INSERT INTO cases (type, userId, officerId, reason, duration, createdAt, arrestLocation, mugshotUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ["ARREST", suspectUsername, officerId, charges, null, Date.now(), arrestLocation, mugshotUrl || null]);
-return result.lastID;
-}
-
-function normalCaseEmbed(caseNumber, type, userId, officerId, reason, duration) {
-const embed = new EmbedBuilder()
-.setTitle(type + " Case #" + caseNumber)
-.setColor(0x2b2d31)
-.addFields(
-{ name: "User", value: "<@" + userId + ">", inline: true },
-{ name: "Officer", value: "<@" + officerId + ">", inline: true },
-{ name: "Reason", value: reason || "No reason", inline: false }
-)
-.setFooter({ text: "Case Number: " + caseNumber })
-.setTimestamp();
-
-if (duration) {
-embed.addFields({ name: "Duration", value: duration, inline: true });
-}
-
-return embed;
-}
-
-function arrestCaseEmbed(caseNumber, suspectUsername, officerId, charges, arrestLocation, mugshotUrl) {
-const embed = new EmbedBuilder()
-.setTitle("ARREST Case #" + caseNumber)
-.setColor(0x2b2d31)
-.addFields(
-{ name: "Suspect Username", value: suspectUsername, inline: true },
-{ name: "Officer", value: "<@" + officerId + ">", inline: true },
-{ name: "Charges", value: charges, inline: false },
-{ name: "Arrest Location", value: arrestLocation, inline: false }
-)
-.setFooter({ text: "Case Number: " + caseNumber })
-.setTimestamp();
-
-if (mugshotUrl) {
-embed.setImage(mugshotUrl);
-}
-
-return embed;
-}
-
-function formatTime(ms) {
-if (!ms || ms < 0) ms = 0;
-const totalMinutes = Math.floor(ms / 60000);
-const hours = Math.floor(totalMinutes / 60);
-const minutes = totalMinutes % 60;
-
+function formatMs(ms) {
+const mins = Math.floor(ms / 60000);
+const hours = Math.floor(mins / 60);
+const minutes = mins % 60;
 if (hours > 0) return hours + "h " + minutes + "m";
 return minutes + "m";
 }
 
-async function getActiveShift(userId) {
-return await get("SELECT * FROM active_shifts WHERE userId = ?", [userId]);
-}
-
-function getShiftBreakMs(shift) {
+function shiftTime(shift) {
 if (!shift) return 0;
-
-let totalBreakMs = Number(shift.totalBreakMs || 0);
-
-if (shift.status === "break" && shift.breakStartedAt) {
-totalBreakMs += Date.now() - Number(shift.breakStartedAt);
+let breakMs = shift.breakMs;
+if (shift.status === "break") breakMs += Date.now() - shift.breakStart;
+return Math.max(0, Date.now() - shift.startedAt - breakMs);
 }
 
-return totalBreakMs;
-}
-
-function getShiftActiveMs(shift) {
-if (!shift) return 0;
-return Math.max(0, Date.now() - Number(shift.startedAt) - getShiftBreakMs(shift));
-}
-
-function buildShiftEmbed(user, shift, notice) {
+function shiftEmbed(user, notice) {
+const shift = activeShifts.get(user.id);
 const embed = new EmbedBuilder()
 .setTitle("Shift Management")
 .setColor(0x2b2d31)
 .setDescription(notice || "Use the buttons below to manage your shift.")
-.setFooter({ text: "Sentinel Utilitys Shift System" })
 .setTimestamp();
 
 if (!shift) {
 embed.addFields(
 { name: "User", value: "<@" + user.id + ">", inline: true },
 { name: "Status", value: "Off Duty", inline: true },
-{ name: "Active Time", value: "0m", inline: true },
-{ name: "Break Time", value: "0m", inline: true }
+{ name: "Active Time", value: "0m", inline: true }
 );
-return embed;
-}
-
+} else {
 embed.addFields(
 { name: "User", value: "<@" + user.id + ">", inline: true },
 { name: "Status", value: shift.status === "break" ? "On Break" : "On Shift", inline: true },
-{ name: "Started", value: "<t:" + Math.floor(Number(shift.startedAt) / 1000) + ":R>", inline: true },
-{ name: "Active Time", value: formatTime(getShiftActiveMs(shift)), inline: true },
-{ name: "Break Time", value: formatTime(getShiftBreakMs(shift)), inline: true }
+{ name: "Active Time", value: formatMs(shiftTime(shift)), inline: true }
 );
-
+}
 return embed;
 }
 
-function buildShiftButtons(userId, shift) {
+function shiftButtons(userId) {
+const shift = activeShifts.get(userId);
 const hasShift = !!shift;
 const onBreak = shift && shift.status === "break";
-
 return [
 new ActionRowBuilder().addComponents(
-new ButtonBuilder()
-.setCustomId("shift_start_" + userId)
-.setLabel("Start")
-.setStyle(ButtonStyle.Success)
-.setDisabled(hasShift),
-new ButtonBuilder()
-.setCustomId("shift_end_" + userId)
-.setLabel("End")
-.setStyle(ButtonStyle.Danger)
-.setDisabled(!hasShift),
-new ButtonBuilder()
-.setCustomId("shift_break_" + userId)
-.setLabel("Break")
-.setStyle(ButtonStyle.Secondary)
-.setDisabled(!hasShift || onBreak),
-new ButtonBuilder()
-.setCustomId("shift_resume_" + userId)
-.setLabel("Resume")
-.setStyle(ButtonStyle.Primary)
-.setDisabled(!hasShift || !onBreak)
+new ButtonBuilder().setCustomId("shift_start_" + userId).setLabel("Start").setStyle(ButtonStyle.Success).setDisabled(hasShift),
+new ButtonBuilder().setCustomId("shift_end_" + userId).setLabel("End").setStyle(ButtonStyle.Danger).setDisabled(!hasShift),
+new ButtonBuilder().setCustomId("shift_break_" + userId).setLabel("Break").setStyle(ButtonStyle.Secondary).setDisabled(!hasShift || onBreak),
+new ButtonBuilder().setCustomId("shift_resume_" + userId).setLabel("Resume").setStyle(ButtonStyle.Primary).setDisabled(!hasShift || !onBreak)
 )
 ];
 }
 
-async function deployCommands() {
-const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-await rest.put(
-Routes.applicationGuildCommands(client.user.id, GUILD_ID),
-{ body: commands }
-);
+async function setOnDuty(guild, userId, add) {
+if (!settings.onDutyRoleId) return;
+const member = await guild.members.fetch(userId).catch(function () { return null; });
+if (!member) return;
+if (add) await member.roles.add(settings.onDutyRoleId).catch(function () {});
+else await member.roles.remove(settings.onDutyRoleId).catch(function () {});
 }
-
-let initialized = false;
-
-client.once("clientReady", async function () {
-if (initialized) return;
-initialized = true;
-
-try {
-await setupDatabase();
-await loadPermissions();
-await deployCommands();
-
-```
-console.log("Logged in as " + client.user.tag);
-console.log("Commands deployed to guild " + GUILD_ID + " using this same bot.");
-```
-
-} catch (error) {
-console.error("Startup error:", error);
-}
-});
 
 async function handleShiftButton(interaction) {
 const parts = interaction.customId.split("_");
@@ -827,103 +387,84 @@ const action = parts[1];
 const ownerId = parts[2];
 
 if (interaction.user.id !== ownerId) {
-return interaction.reply({
-content: "This shift panel is not yours.",
-ephemeral: true
-});
+return interaction.reply({ content: "This shift panel is not yours.", ephemeral: true });
 }
 
 const member = await getCommandMember(interaction);
-
 if (!hasLevel(member, "staff", interaction)) {
-return interaction.reply({
-content: "Staff only.",
-ephemeral: true
-});
+return interaction.reply({ content: "Staff only.", ephemeral: true });
 }
 
-const shift = await getActiveShift(interaction.user.id);
-let notice = null;
+const shift = activeShifts.get(interaction.user.id);
+let notice = "Updated.";
 
 if (action === "start") {
-if (shift) {
-notice = "You are already on shift.";
-} else {
-await run("INSERT INTO active_shifts (userId, startedAt, status, breakStartedAt, totalBreakMs) VALUES (?, ?, ?, ?, ?)", [interaction.user.id, Date.now(), "active", null, 0]);
-const roleResult = await addOnDutyRole(interaction.guild, interaction.user.id);
-notice = roleResult.ok ? "Shift started. On-Duty role added." : "Shift started. " + roleResult.message;
+if (shift) notice = "You are already on shift.";
+else {
+activeShifts.set(interaction.user.id, { startedAt: Date.now(), status: "active", breakStart: 0, breakMs: 0 });
+await setOnDuty(interaction.guild, interaction.user.id, true);
+notice = "Shift started.";
 }
 }
 
 if (action === "break") {
-if (!shift) {
-notice = "You need to start your shift first.";
-} else if (shift.status === "break") {
-notice = "You are already on break.";
-} else {
-await run("UPDATE active_shifts SET status = ?, breakStartedAt = ? WHERE userId = ?", ["break", Date.now(), interaction.user.id]);
-const roleResult = await removeOnDutyRole(interaction.guild, interaction.user.id);
-notice = roleResult.ok ? "You are now on break. On-Duty role removed." : "You are now on break. " + roleResult.message;
+if (!shift) notice = "You need to start your shift first.";
+else if (shift.status === "break") notice = "You are already on break.";
+else {
+shift.status = "break";
+shift.breakStart = Date.now();
+await setOnDuty(interaction.guild, interaction.user.id, false);
+notice = "You are now on break.";
 }
 }
 
 if (action === "resume") {
-if (!shift) {
-notice = "You need to start your shift first.";
-} else if (shift.status !== "break") {
-notice = "You are not on break.";
-} else {
-const currentBreakMs = Date.now() - Number(shift.breakStartedAt);
-const newTotalBreakMs = Number(shift.totalBreakMs || 0) + currentBreakMs;
-await run("UPDATE active_shifts SET status = ?, breakStartedAt = ?, totalBreakMs = ? WHERE userId = ?", ["active", null, newTotalBreakMs, interaction.user.id]);
-const roleResult = await addOnDutyRole(interaction.guild, interaction.user.id);
-notice = roleResult.ok ? "Break ended. On-Duty role added." : "Break ended. " + roleResult.message;
+if (!shift) notice = "You need to start your shift first.";
+else if (shift.status !== "break") notice = "You are not on break.";
+else {
+shift.breakMs += Date.now() - shift.breakStart;
+shift.status = "active";
+shift.breakStart = 0;
+await setOnDuty(interaction.guild, interaction.user.id, true);
+notice = "Break ended.";
 }
 }
 
 if (action === "end") {
-if (!shift) {
-notice = "You are not on shift.";
-} else {
-let totalBreakMs = Number(shift.totalBreakMs || 0);
-
-```
-  if (shift.status === "break" && shift.breakStartedAt) {
-    totalBreakMs += Date.now() - Number(shift.breakStartedAt);
-  }
-
-  const endedAt = Date.now();
-  const activeMs = Math.max(0, endedAt - Number(shift.startedAt) - totalBreakMs);
-  const minutes = Math.max(1, Math.floor(activeMs / 60000));
-
-  await run("INSERT INTO shifts (userId, startedAt, endedAt, minutes) VALUES (?, ?, ?, ?)", [interaction.user.id, Number(shift.startedAt), endedAt, minutes]);
-  await run("DELETE FROM active_shifts WHERE userId = ?", [interaction.user.id]);
-
-  const roleResult = await removeOnDutyRole(interaction.guild, interaction.user.id);
-  notice = roleResult.ok ? "Shift ended. Logged " + minutes + " minutes. On-Duty role removed." : "Shift ended. Logged " + minutes + " minutes. " + roleResult.message;
+if (!shift) notice = "You are not on shift.";
+else {
+const minutes = Math.max(1, Math.floor(shiftTime(shift) / 60000));
+completedShifts.push({ userId: interaction.user.id, minutes: minutes });
+activeShifts.delete(interaction.user.id);
+await setOnDuty(interaction.guild, interaction.user.id, false);
+notice = "Shift ended. Logged " + minutes + " minutes.";
 }
-```
-
 }
-
-const updatedShift = await getActiveShift(interaction.user.id);
 
 return interaction.update({
-embeds: [buildShiftEmbed(interaction.user, updatedShift, notice)],
-components: buildShiftButtons(interaction.user.id, updatedShift)
+embeds: [shiftEmbed(interaction.user, notice)],
+components: shiftButtons(interaction.user.id)
 });
 }
+
+client.once("clientReady", async function () {
+try {
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
+console.log("Logged in as " + client.user.tag);
+console.log("Commands deployed to guild " + GUILD_ID + " using this same bot.");
+} catch (error) {
+console.error("Startup error:", error);
+}
+});
 
 client.on("interactionCreate", async function (interaction) {
 try {
 if (interaction.isButton()) {
-if (interaction.customId.startsWith("shift_")) {
-return await handleShiftButton(interaction);
-}
+if (interaction.customId.startsWith("shift_")) return await handleShiftButton(interaction);
 return;
 }
 
-```
 if (!interaction.isChatInputCommand()) return;
 
 const command = interaction.commandName;
@@ -931,495 +472,217 @@ const member = await getCommandMember(interaction);
 
 if (command === "help") {
   const embed = new EmbedBuilder()
-    .setTitle("ERLC Staff Bot Commands")
+    .setTitle("SEA Bot Commands")
     .setColor(0x2b2d31)
     .setDescription([
+      "/help - Show commands",
       "/shift manage - Open shift panel",
       "/embed send - Send a custom embed",
       "/welcome set/off/test - Manage welcome messages",
-      "/autorole add/remove/list - Manage join auto-roles",
+      "/autorole add/remove/list - Manage auto roles",
       "/log arrest - Log an arrest",
       "/leaderboard - Shift leaderboard",
-      "/warn - Issue warning case",
-      "/infract - Issue infraction case",
+      "/warn - Warn a user",
+      "/infract - Create infraction",
       "/kick - Kick user",
       "/ban - Ban user",
       "/mute - Timeout user",
       "/unmute - Remove timeout",
-      "/case - Look up case",
+      "/case - Look up a case",
       "/history - View user history",
       "/perm add/remove/list - Manage permission roles",
-      "/config logs - Set logs channel",
-      "/config onduty - Set On-Duty role"
+      "/config logs/onduty - Configure bot"
     ].join("\n"));
-
   return interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 if (command === "embed") {
-  if (!hasLevel(member, "high", interaction)) {
-    return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "high", interaction)) return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
   const channel = interaction.options.getChannel("channel");
   const title = interaction.options.getString("title");
   const description = interaction.options.getString("description");
   const colorChoice = interaction.options.getString("color") || "black";
   const image = interaction.options.getString("image");
   const thumbnail = interaction.options.getString("thumbnail");
-  const footer = interaction.options.getString("footer");
-
-  if (!channel || !channel.isTextBased()) {
-    return interaction.reply({ content: "Pick a text channel.", ephemeral: true });
-  }
-
-  const colors = {
-    black: 0x2b2d31,
-    blue: 0x3498db,
-    green: 0x2ecc71,
-    red: 0xe74c3c,
-    gold: 0xf1c40f,
-    purple: 0x9b59b6,
-    white: 0xffffff
-  };
-
-  const embed = new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(description)
-    .setColor(colors[colorChoice] || 0x2b2d31)
-    .setFooter({ text: footer || "Sentinel Enforcement Authority" })
-    .setTimestamp();
-
+  const footer = interaction.options.getString("footer") || "Sentinel Enforcement Authority";
+  const colors = { black: 0x2b2d31, blue: 0x3498db, green: 0x2ecc71, red: 0xe74c3c, gold: 0xf1c40f, purple: 0x9b59b6, white: 0xffffff };
+  if (!channel || !channel.isTextBased()) return interaction.reply({ content: "Pick a text channel.", ephemeral: true });
+  const embed = new EmbedBuilder().setTitle(title).setDescription(description).setColor(colors[colorChoice] || 0x2b2d31).setFooter({ text: footer }).setTimestamp();
   if (image && image.startsWith("http")) embed.setImage(image);
   if (thumbnail && thumbnail.startsWith("http")) embed.setThumbnail(thumbnail);
-
   await channel.send({ embeds: [embed] });
   return interaction.reply({ content: "Embed sent in " + channel.toString() + ".", ephemeral: true });
 }
 
 if (command === "welcome") {
-  if (!hasLevel(member, "high", interaction)) {
-    return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "high", interaction)) return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
   const sub = interaction.options.getSubcommand();
-
   if (sub === "set") {
     const channel = interaction.options.getChannel("channel");
-    const title = interaction.options.getString("title") || "Welcome to Sentinel Enforcement Authority";
-    const message = interaction.options.getString("message") || "Welcome {user} to {server}! You are member #{memberCount}.";
-    const image = interaction.options.getString("image") || "";
-
-    if (!channel || !channel.isTextBased()) {
-      return interaction.reply({ content: "Pick a text channel.", ephemeral: true });
-    }
-
-    await setConfig("welcome_enabled", "true");
-    await setConfig("welcome_channel_id", channel.id);
-    await setConfig("welcome_title", title);
-    await setConfig("welcome_message", message);
-    await setConfig("welcome_image", image);
-
+    settings.welcomeEnabled = true;
+    settings.welcomeChannelId = channel.id;
+    settings.welcomeTitle = interaction.options.getString("title") || settings.welcomeTitle;
+    settings.welcomeMessage = interaction.options.getString("message") || settings.welcomeMessage;
+    settings.welcomeImage = interaction.options.getString("image") || "";
     return interaction.reply({ content: "Welcome system set to " + channel.toString() + ". Use /welcome test.", ephemeral: true });
   }
-
   if (sub === "off") {
-    await setConfig("welcome_enabled", "false");
+    settings.welcomeEnabled = false;
     return interaction.reply({ content: "Welcome system turned off.", ephemeral: true });
   }
-
   if (sub === "test") {
-    await sendWelcomeMessage(member);
+    await sendWelcome(member);
     return interaction.reply({ content: "Sent a test welcome message.", ephemeral: true });
   }
 }
 
 if (command === "autorole") {
-  if (!hasLevel(member, "high", interaction)) {
-    return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "high", interaction)) return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
   const sub = interaction.options.getSubcommand();
-
+  const role = interaction.options.getRole("role");
   if (sub === "add") {
-    const role = interaction.options.getRole("role");
-
-    if (role.managed) {
-      return interaction.reply({ content: "You cannot use bot or integration managed roles.", ephemeral: true });
-    }
-
-    const result = await addAutoRole(role.id);
-
-    if (!result.ok) {
-      return interaction.reply({ content: result.message, ephemeral: true });
-    }
-
-    return interaction.reply({ content: role.toString() + " saved as an auto-role. Automatic join roles need Server Members Intent later.", ephemeral: true });
+    if (autoroles.size >= 5) return interaction.reply({ content: "Max 5 auto roles.", ephemeral: true });
+    autoroles.add(role.id);
+    return interaction.reply({ content: role.toString() + " saved. Auto join roles need Server Members Intent later.", ephemeral: true });
   }
-
   if (sub === "remove") {
-    const role = interaction.options.getRole("role");
-    await removeAutoRole(role.id);
-    return interaction.reply({ content: role.toString() + " removed from auto-roles.", ephemeral: true });
+    autoroles.delete(role.id);
+    return interaction.reply({ content: role.toString() + " removed.", ephemeral: true });
   }
-
   if (sub === "list") {
-    const roles = await getAutoRoles();
-
-    if (!roles.length) {
-      return interaction.reply({ content: "No auto-roles set.", ephemeral: true });
-    }
-
-    return interaction.reply({
-      content: "Auto-Roles:\n" + roles.map(function (r) { return "<@&" + r.roleId + ">"; }).join("\n"),
-      ephemeral: true
-    });
+    const list = Array.from(autoroles).map(function (id) { return "<@&" + id + ">"; }).join("\n");
+    return interaction.reply({ content: list || "No auto roles set.", ephemeral: true });
   }
 }
 
 if (command === "perm") {
-  if (!hasLevel(member, "high", interaction)) {
-    return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "high", interaction)) return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
   const sub = interaction.options.getSubcommand();
-
+  const permission = interaction.options.getString("permission");
+  const role = interaction.options.getRole("role");
   if (sub === "add") {
-    const permission = interaction.options.getString("permission");
-    const role = interaction.options.getRole("role");
-
-    await run("INSERT OR IGNORE INTO permission_roles (permission, roleId) VALUES (?, ?)", [permission, role.id]);
-    await loadPermissions();
-
-    return interaction.reply({ content: "Added " + role.toString() + " to " + permission + " permissions.", ephemeral: true });
+    permissionRoles[permission].add(role.id);
+    return interaction.reply({ content: "Added " + role.toString() + " to " + permission + ".", ephemeral: true });
   }
-
   if (sub === "remove") {
-    const permission = interaction.options.getString("permission");
-    const role = interaction.options.getRole("role");
-
-    await run("DELETE FROM permission_roles WHERE permission = ? AND roleId = ?", [permission, role.id]);
-    await loadPermissions();
-
-    return interaction.reply({ content: "Removed " + role.toString() + " from " + permission + " permissions.", ephemeral: true });
+    permissionRoles[permission].delete(role.id);
+    return interaction.reply({ content: "Removed " + role.toString() + " from " + permission + ".", ephemeral: true });
   }
-
   if (sub === "list") {
-    const rows = await all("SELECT permission, roleId FROM permission_roles ORDER BY permission");
-
-    if (!rows.length) {
-      return interaction.reply({ content: "No permission roles set yet.", ephemeral: true });
-    }
-
     let text = "";
-
-    for (const permission of ["staff", "mod", "admin", "high", "infract"]) {
-      const roles = rows.filter(function (r) {
-        return r.permission === permission;
-      }).map(function (r) {
-        return "<@&" + r.roleId + ">";
-      });
-
-      text += permission.toUpperCase() + ": " + (roles.length ? roles.join(", ") : "None") + "\n";
+    for (const key of ["staff", "mod", "admin", "high", "infract"]) {
+      const roles = Array.from(permissionRoles[key]).map(function (id) { return "<@&" + id + ">"; });
+      text += key.toUpperCase() + ": " + (roles.length ? roles.join(", ") : "None") + "\n";
     }
-
     return interaction.reply({ content: text, ephemeral: true });
   }
 }
 
 if (command === "config") {
-  if (!hasLevel(member, "high", interaction)) {
-    return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "high", interaction)) return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
   const sub = interaction.options.getSubcommand();
-
   if (sub === "logs") {
     const channel = interaction.options.getChannel("channel");
-    await setConfig("logs_channel_id", channel.id);
+    settings.logsChannelId = channel.id;
     return interaction.reply({ content: "Logs channel set to " + channel.toString() + ".", ephemeral: true });
   }
-
   if (sub === "onduty") {
     const role = interaction.options.getRole("role");
-    await setConfig("onduty_role_id", role.id);
+    settings.onDutyRoleId = role.id;
     return interaction.reply({ content: "On-Duty role set to " + role.toString() + ".", ephemeral: true });
   }
 }
 
 if (command === "shift") {
-  if (!hasLevel(member, "staff", interaction)) {
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
-
-  const shift = await getActiveShift(interaction.user.id);
-  return interaction.reply({
-    embeds: [buildShiftEmbed(interaction.user, shift, null)],
-    components: buildShiftButtons(interaction.user.id, shift),
-    ephemeral: true
-  });
+  if (!hasLevel(member, "staff", interaction)) return interaction.reply({ content: "Staff only.", ephemeral: true });
+  return interaction.reply({ embeds: [shiftEmbed(interaction.user, null)], components: shiftButtons(interaction.user.id), ephemeral: true });
 }
 
 if (command === "log") {
-  const sub = interaction.options.getSubcommand();
-
-  if (sub === "arrest") {
-    if (!hasLevel(member, "staff", interaction)) {
-      return interaction.reply({ content: "Staff only.", ephemeral: true });
-    }
-
-    const suspectUsername = interaction.options.getString("suspect_username");
-    const charges = interaction.options.getString("charges");
-    const arrestLocation = interaction.options.getString("arrest_location");
-    const mugshot = interaction.options.getAttachment("mugshot");
-    const mugshotUrl = mugshot ? mugshot.url : null;
-
-    const caseNumber = await createArrestCase(suspectUsername, interaction.user.id, charges, arrestLocation, mugshotUrl);
-    const embed = arrestCaseEmbed(caseNumber, suspectUsername, interaction.user.id, charges, arrestLocation, mugshotUrl);
-
-    await sendLogEmbed(embed);
-    return interaction.reply({ content: "Arrest logged. Case #" + caseNumber, embeds: [embed] });
-  }
+  if (!hasLevel(member, "staff", interaction)) return interaction.reply({ content: "Staff only.", ephemeral: true });
+  const suspect = interaction.options.getString("suspect_username");
+  const charges = interaction.options.getString("charges");
+  const location = interaction.options.getString("arrest_location");
+  const mugshot = interaction.options.getAttachment("mugshot");
+  const item = createCase("ARREST", suspect, interaction.user.id, charges, null, { arrestLocation: location, mugshotUrl: mugshot ? mugshot.url : null });
+  const embed = caseEmbed(item);
+  await sendLog(embed);
+  return interaction.reply({ content: "Arrest logged. Case #" + item.caseNumber, embeds: [embed] });
 }
 
 if (command === "leaderboard") {
-  if (!hasLevel(member, "staff", interaction)) {
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
-
-  const rows = await all("SELECT userId, SUM(minutes) as total FROM shifts GROUP BY userId ORDER BY total DESC LIMIT 10");
-
-  if (!rows.length) {
-    return interaction.reply("No shift data yet.");
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle("Shift Leaderboard")
-    .setColor(0x2b2d31)
-    .setDescription(rows.map(function (r, i) {
-      return "#" + (i + 1) + " <@" + r.userId + "> - " + r.total + " minutes";
-    }).join("\n"));
-
+  if (!hasLevel(member, "staff", interaction)) return interaction.reply({ content: "Staff only.", ephemeral: true });
+  const totals = new Map();
+  completedShifts.forEach(function (s) { totals.set(s.userId, (totals.get(s.userId) || 0) + s.minutes); });
+  const sorted = Array.from(totals.entries()).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 10);
+  if (!sorted.length) return interaction.reply("No shift data yet.");
+  const embed = new EmbedBuilder().setTitle("Shift Leaderboard").setColor(0x2b2d31).setDescription(sorted.map(function (x, i) { return "#" + (i + 1) + " <@" + x[0] + "> - " + x[1] + " minutes"; }).join("\n"));
   return interaction.reply({ embeds: [embed] });
 }
 
-if (command === "warn") {
-  if (!hasLevel(member, "mod", interaction)) {
-    return interaction.reply({ content: "Mods+ only.", ephemeral: true });
-  }
-
+if (command === "warn" || command === "infract" || command === "kick" || command === "ban" || command === "mute" || command === "unmute") {
   const target = interaction.options.getUser("user");
   const reason = interaction.options.getString("reason") || "No reason";
   const targetMember = await getTargetMember(interaction, target);
 
-  if (targetMember && !canActOn(member, targetMember, interaction)) {
-    return interaction.reply({ content: "You cannot warn this officer.", ephemeral: true });
+  if (command === "warn" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
+  if (command === "kick" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
+  if (command === "mute" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
+  if (command === "unmute" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
+  if (command === "ban" && !hasLevel(member, "admin", interaction)) return interaction.reply({ content: "Admins+ only.", ephemeral: true });
+  if (command === "infract" && !hasInfract(member, interaction)) return interaction.reply({ content: "You need the Infract permission role.", ephemeral: true });
+  if (!canAct(member, targetMember, interaction)) return interaction.reply({ content: "You cannot moderate this user.", ephemeral: true });
+
+  if (command === "kick") {
+    if (!targetMember || !targetMember.kickable) return interaction.reply({ content: "I cannot kick this user. Move my role higher.", ephemeral: true });
+    await targetMember.kick(reason);
+  }
+  if (command === "ban") {
+    if (targetMember && !targetMember.bannable) return interaction.reply({ content: "I cannot ban this user. Move my role higher.", ephemeral: true });
+    await interaction.guild.members.ban(target.id, { reason: reason });
+  }
+  if (command === "mute") {
+    const minutes = interaction.options.getInteger("minutes") || 10;
+    if (!targetMember || !targetMember.moderatable) return interaction.reply({ content: "I cannot mute this user. Move my role higher.", ephemeral: true });
+    await targetMember.timeout(minutes * 60 * 1000, reason);
+    const item = createCase("MUTE", target.id, interaction.user.id, reason, minutes + " minutes", null);
+    const embed = caseEmbed(item);
+    await sendLog(embed);
+    return interaction.reply({ content: "Muted " + target.tag + " for " + minutes + " minutes. Case #" + item.caseNumber, embeds: [embed] });
+  }
+  if (command === "unmute") {
+    if (!targetMember) return interaction.reply({ content: "User is not in the server.", ephemeral: true });
+    await targetMember.timeout(null, reason);
   }
 
-  const caseNumber = await createCase("WARN", target.id, interaction.user.id, reason, null);
-  const embed = normalCaseEmbed(caseNumber, "WARN", target.id, interaction.user.id, reason, null);
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Warning created. Case #" + caseNumber, embeds: [embed] });
-}
-
-if (command === "infract") {
-  if (!hasSpecificPermission(member, "infract", interaction)) {
-    return interaction.reply({ content: "You need the Infract permission role.", ephemeral: true });
-  }
-
-  const target = interaction.options.getUser("user");
-  const reason = interaction.options.getString("reason") || "No reason";
-  const caseNumber = await createCase("INFRACTION", target.id, interaction.user.id, reason, null);
-  const embed = normalCaseEmbed(caseNumber, "INFRACTION", target.id, interaction.user.id, reason, null);
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Infraction created. Case #" + caseNumber, embeds: [embed] });
-}
-
-if (command === "kick") {
-  if (!hasLevel(member, "mod", interaction)) {
-    return interaction.reply({ content: "Mods+ only.", ephemeral: true });
-  }
-
-  const target = interaction.options.getUser("user");
-  const reason = interaction.options.getString("reason") || "No reason";
-  const targetMember = await getTargetMember(interaction, target);
-
-  if (!targetMember) {
-    return interaction.reply({ content: "User is not in the server.", ephemeral: true });
-  }
-
-  if (!canActOn(member, targetMember, interaction)) {
-    return interaction.reply({ content: "You cannot kick this user.", ephemeral: true });
-  }
-
-  if (!targetMember.kickable) {
-    return interaction.reply({ content: "I cannot kick this user. Move my role higher.", ephemeral: true });
-  }
-
-  await targetMember.kick(reason);
-  const caseNumber = await createCase("KICK", target.id, interaction.user.id, reason, null);
-  const embed = normalCaseEmbed(caseNumber, "KICK", target.id, interaction.user.id, reason, null);
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Kicked " + target.tag + ". Case #" + caseNumber, embeds: [embed] });
-}
-
-if (command === "ban") {
-  if (!hasLevel(member, "admin", interaction)) {
-    return interaction.reply({ content: "Admins+ only.", ephemeral: true });
-  }
-
-  const target = interaction.options.getUser("user");
-  const reason = interaction.options.getString("reason") || "No reason";
-  const targetMember = await getTargetMember(interaction, target);
-
-  if (targetMember && !canActOn(member, targetMember, interaction)) {
-    return interaction.reply({ content: "You cannot ban this user.", ephemeral: true });
-  }
-
-  if (targetMember && !targetMember.bannable) {
-    return interaction.reply({ content: "I cannot ban this user. Move my role higher.", ephemeral: true });
-  }
-
-  await interaction.guild.members.ban(target.id, { reason: reason });
-  const caseNumber = await createCase("BAN", target.id, interaction.user.id, reason, null);
-  const embed = normalCaseEmbed(caseNumber, "BAN", target.id, interaction.user.id, reason, null);
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Banned " + target.tag + ". Case #" + caseNumber, embeds: [embed] });
-}
-
-if (command === "mute") {
-  if (!hasLevel(member, "mod", interaction)) {
-    return interaction.reply({ content: "Mods+ only.", ephemeral: true });
-  }
-
-  const target = interaction.options.getUser("user");
-  const minutes = interaction.options.getInteger("minutes") || 10;
-  const reason = interaction.options.getString("reason") || "No reason";
-  const targetMember = await getTargetMember(interaction, target);
-
-  if (!targetMember) {
-    return interaction.reply({ content: "User is not in the server.", ephemeral: true });
-  }
-
-  if (!canActOn(member, targetMember, interaction)) {
-    return interaction.reply({ content: "You cannot mute this user.", ephemeral: true });
-  }
-
-  if (!targetMember.moderatable) {
-    return interaction.reply({ content: "I cannot mute this user. Move my role higher.", ephemeral: true });
-  }
-
-  await targetMember.timeout(minutes * 60 * 1000, reason);
-  const caseNumber = await createCase("MUTE", target.id, interaction.user.id, reason, minutes + " minutes");
-  const embed = normalCaseEmbed(caseNumber, "MUTE", target.id, interaction.user.id, reason, minutes + " minutes");
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Muted " + target.tag + " for " + minutes + " minutes. Case #" + caseNumber, embeds: [embed] });
-}
-
-if (command === "unmute") {
-  if (!hasLevel(member, "mod", interaction)) {
-    return interaction.reply({ content: "Mods+ only.", ephemeral: true });
-  }
-
-  const target = interaction.options.getUser("user");
-  const reason = interaction.options.getString("reason") || "No reason";
-  const targetMember = await getTargetMember(interaction, target);
-
-  if (!targetMember) {
-    return interaction.reply({ content: "User is not in the server.", ephemeral: true });
-  }
-
-  if (!canActOn(member, targetMember, interaction)) {
-    return interaction.reply({ content: "You cannot unmute this user.", ephemeral: true });
-  }
-
-  await targetMember.timeout(null, reason);
-  const caseNumber = await createCase("UNMUTE", target.id, interaction.user.id, reason, null);
-  const embed = normalCaseEmbed(caseNumber, "UNMUTE", target.id, interaction.user.id, reason, null);
-
-  await sendLogEmbed(embed);
-  return interaction.reply({ content: "Unmuted " + target.tag + ". Case #" + caseNumber, embeds: [embed] });
+  const type = command.toUpperCase() === "INFRACT" ? "INFRACTION" : command.toUpperCase();
+  const item = createCase(type, target.id, interaction.user.id, reason, null, null);
+  const embed = caseEmbed(item);
+  await sendLog(embed);
+  return interaction.reply({ content: type + " created. Case #" + item.caseNumber, embeds: [embed] });
 }
 
 if (command === "case") {
-  if (!hasLevel(member, "staff", interaction)) {
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "staff", interaction)) return interaction.reply({ content: "Staff only.", ephemeral: true });
   const number = interaction.options.getInteger("number");
-  const row = await get("SELECT * FROM cases WHERE caseNumber = ?", [number]);
-
-  if (!row) {
-    return interaction.reply({ content: "Case not found.", ephemeral: true });
-  }
-
-  const time = row.createdAt || Date.now();
-  const userValue = row.type === "ARREST" ? row.userId : "<@" + row.userId + ">";
-
-  const embed = new EmbedBuilder()
-    .setTitle("Case #" + row.caseNumber)
-    .setColor(0x2b2d31)
-    .addFields(
-      { name: "Type", value: row.type, inline: true },
-      { name: "User", value: userValue, inline: true },
-      { name: "Officer", value: "<@" + row.officerId + ">", inline: true },
-      { name: "Reason", value: row.reason, inline: false },
-      { name: "Time", value: "<t:" + Math.floor(time / 1000) + ":F>", inline: false }
-    )
-    .setFooter({ text: "Case Number: " + row.caseNumber });
-
-  if (row.duration) embed.addFields({ name: "Duration", value: row.duration, inline: true });
-  if (row.arrestLocation) embed.addFields({ name: "Arrest Location", value: row.arrestLocation, inline: false });
-  if (row.mugshotUrl) embed.setImage(row.mugshotUrl);
-
-  return interaction.reply({ embeds: [embed] });
+  const item = cases.find(function (c) { return c.caseNumber === number; });
+  if (!item) return interaction.reply({ content: "Case not found.", ephemeral: true });
+  return interaction.reply({ embeds: [caseEmbed(item)] });
 }
 
 if (command === "history") {
-  if (!hasLevel(member, "staff", interaction)) {
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
-
+  if (!hasLevel(member, "staff", interaction)) return interaction.reply({ content: "Staff only.", ephemeral: true });
   const target = interaction.options.getUser("user");
-  const rows = await all("SELECT * FROM cases WHERE userId = ? ORDER BY caseNumber DESC LIMIT 10", [target.id]);
-
-  if (!rows.length) {
-    return interaction.reply("No history found for " + target.tag + ".");
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle("History for " + target.tag)
-    .setColor(0x2b2d31)
-    .setDescription(rows.map(function (r) {
-      return "#" + r.caseNumber + " [" + r.type + "] " + r.reason;
-    }).join("\n"));
-
+  const rows = cases.filter(function (c) { return c.userId === target.id; }).slice(-10).reverse();
+  if (!rows.length) return interaction.reply("No history found for " + target.tag + ".");
+  const embed = new EmbedBuilder().setTitle("History for " + target.tag).setColor(0x2b2d31).setDescription(rows.map(function (c) { return "#" + c.caseNumber + " [" + c.type + "] " + c.reason; }).join("\n"));
   return interaction.reply({ embeds: [embed] });
 }
-```
 
 } catch (error) {
 console.error("Interaction error:", error);
-
-```
-if (!interaction.replied && !interaction.deferred) {
-  return interaction.reply({
-    content: "Error running command. Check Railway logs.",
-    ephemeral: true
-  });
-}
-
-return interaction.followUp({
-  content: "Error running command. Check Railway logs.",
-  ephemeral: true
-});
-```
-
+if (!interaction.replied && !interaction.deferred) return interaction.reply({ content: "Error running command. Check Railway logs.", ephemeral: true });
+return interaction.followUp({ content: "Error running command. Check Railway logs.", ephemeral: true });
 }
 });
 
