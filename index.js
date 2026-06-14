@@ -801,9 +801,7 @@ embed.addFields(
 { name: "Break Time", value: "0m", inline: true }
 );
 
-```
 return embed;
-```
 
 }
 
@@ -830,7 +828,6 @@ new ButtonBuilder()
 .setStyle(ButtonStyle.Success)
 .setDisabled(hasShift),
 
-```
   new ButtonBuilder()
     .setCustomId("shift_end_" + userId)
     .setLabel("End")
@@ -849,7 +846,6 @@ new ButtonBuilder()
     .setStyle(ButtonStyle.Primary)
     .setDisabled(!hasShift || !onBreak)
 )
-```
 
 ];
 }
@@ -866,7 +862,6 @@ try {
 await setupDatabase();
 await loadPermissions();
 
-```
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 await rest.put(
@@ -876,7 +871,6 @@ await rest.put(
 
 console.log("✅ Logged in as " + client.user.tag);
 console.log("✅ Commands deployed to guild " + GUILD_ID + " using this same bot.");
-```
 
 } catch (error) {
 console.error("❌ Startup error:", error);
@@ -889,7 +883,6 @@ client.on("interactionCreate", async (interaction) => {
 try {
 console.log("Interaction received:", interaction.commandName || interaction.customId);
 
-```
 if (interaction.isButton()) {
   if (!interaction.customId.startsWith("shift_")) return;
 
