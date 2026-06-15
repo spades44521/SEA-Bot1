@@ -8,7 +8,8 @@ ButtonBuilder,
 ButtonStyle,
 REST,
 Routes,
-SlashCommandBuilder
+SlashCommandBuilder,
+ChannelType
 } = require("discord.js");
 
 const sqlite3 = require("sqlite3").verbose();
@@ -75,6 +76,13 @@ await addColumnIfMissing("cases", "duration", "TEXT");
 await addColumnIfMissing("cases", "createdAt", "INTEGER");
 await addColumnIfMissing("cases", "arrestLocation", "TEXT");
 await addColumnIfMissing("cases", "mugshotUrl", "TEXT");
+await addColumnIfMissing("cases", "status", "TEXT DEFAULT 'active'");
+await addColumnIfMissing("cases", "voidedBy", "TEXT");
+await addColumnIfMissing("cases", "voidReason", "TEXT");
+await addColumnIfMissing("cases", "voidedAt", "INTEGER");
+await addColumnIfMissing("cases", "evidenceUrl", "TEXT");
+await addColumnIfMissing("cases", "punishment", "TEXT");
+await addColumnIfMissing("cases", "notes", "TEXT");
 
 await run("CREATE TABLE IF NOT EXISTS active_shifts (userId TEXT PRIMARY KEY, startedAt INTEGER NOT NULL, status TEXT DEFAULT 'active', breakStartedAt INTEGER, totalBreakMs INTEGER DEFAULT 0)");
 
@@ -86,6 +94,13 @@ await run("CREATE TABLE IF NOT EXISTS shifts (id INTEGER PRIMARY KEY AUTOINCREME
 
 await addColumnIfMissing("shifts", "startedAt", "INTEGER");
 await addColumnIfMissing("shifts", "endedAt", "INTEGER");
+
+await run("CREATE TABLE IF NOT EXISTS tickets (channelId TEXT PRIMARY KEY, userId TEXT NOT NULL, claimedBy TEXT, status TEXT DEFAULT 'open', createdAt INTEGER NOT NULL, closedAt INTEGER)");
+
+await addColumnIfMissing("tickets", "claimedBy", "TEXT");
+await addColumnIfMissing("tickets", "status", "TEXT DEFAULT 'open'");
+await addColumnIfMissing("tickets", "createdAt", "INTEGER");
+await addColumnIfMissing("tickets", "closedAt", "INTEGER");
 }
 
 const permissionChoices = [
@@ -94,6 +109,21 @@ const permissionChoices = [
 { name: "admin", value: "admin" },
 { name: "high", value: "high" },
 { name: "infract", value: "infract" }
+];
+
+const infractionTypeChoices = [
+{ name: "Warning", value: "Warning" },
+{ name: "Strike", value: "Strike" },
+{ name: "Suspension", value: "Suspension" },
+{ name: "Demotion", value: "Demotion" },
+{ name: "Termination", value: "Termination" },
+{ name: "Other", value: "Other" }
+];
+
+const infractionStatusChoices = [
+{ name: "Active", value: "active" },
+{ name: "Voided", value: "voided" },
+{ name: "All", value: "all" }
 ];
 
 const commands = [
@@ -198,13 +228,92 @@ return sub
 .addAttachmentOption(function (o) { return o.setName("mugshot").setDescription("Mugshot image").setRequired(false); });
 }),
 
+new SlashCommandBuilder()
+.setName("ticket")
+.setDescription("Ticket system")
+.addSubcommand(function (sub) {
+return sub
+.setName("setup")
+.setDescription("Set up Ticket Tool style tickets")
+.addChannelOption(function (o) { return o.setName("panel_channel").setDescription("Channel for the ticket panel").setRequired(true); })
+.addChannelOption(function (o) { return o.setName("category").setDescription("Category where tickets are created").setRequired(true); })
+.addRoleOption(function (o) { return o.setName("staff_role").setDescription("Role that can view and claim tickets").setRequired(true); })
+.addChannelOption(function (o) { return o.setName("logs").setDescription("Ticket logs channel").setRequired(true); });
+})
+.addSubcommand(function (sub) { return sub.setName("panel").setDescription("Send the ticket panel again"); })
+.addSubcommand(function (sub) { return sub.setName("close").setDescription("Close the current ticket"); })
+.addSubcommand(function (sub) {
+return sub.setName("add").setDescription("Add a user to the current ticket").addUserOption(function (o) { return o.setName("user").setDescription("User to add").setRequired(true); });
+})
+.addSubcommand(function (sub) {
+return sub.setName("remove").setDescription("Remove a user from the current ticket").addUserOption(function (o) { return o.setName("user").setDescription("User to remove").setRequired(true); });
+}),
+
+new SlashCommandBuilder()
+.setName("infract")
+.setDescription("Infraction system")
+.addSubcommand(function (sub) {
+return sub
+.setName("create")
+.setDescription("Create an infraction")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("type").setDescription("Infraction type").setRequired(true).addChoices.apply(o, infractionTypeChoices); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(true).setMaxLength(1000); })
+.addStringOption(function (o) { return o.setName("evidence").setDescription("Evidence URL").setRequired(false).setMaxLength(1000); })
+.addStringOption(function (o) { return o.setName("note").setDescription("Private note").setRequired(false).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("lookup")
+.setDescription("Look up an infraction by case number")
+.addIntegerOption(function (o) { return o.setName("case").setDescription("Case number").setRequired(true); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("history")
+.setDescription("View infraction history for a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("status").setDescription("Filter by status").setRequired(false).addChoices.apply(o, infractionStatusChoices); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("void")
+.setDescription("Void an infraction")
+.addIntegerOption(function (o) { return o.setName("case").setDescription("Case number").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Void reason").setRequired(true).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("edit")
+.setDescription("Edit an infraction")
+.addIntegerOption(function (o) { return o.setName("case").setDescription("Case number").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("New reason").setRequired(false).setMaxLength(1000); })
+.addStringOption(function (o) { return o.setName("type").setDescription("New type").setRequired(false).addChoices.apply(o, infractionTypeChoices); })
+.addStringOption(function (o) { return o.setName("evidence").setDescription("New evidence URL").setRequired(false).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("note")
+.setDescription("Add a note to an infraction")
+.addIntegerOption(function (o) { return o.setName("case").setDescription("Case number").setRequired(true); })
+.addStringOption(function (o) { return o.setName("note").setDescription("Note").setRequired(true).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("list")
+.setDescription("List recent infractions")
+.addStringOption(function (o) { return o.setName("status").setDescription("Filter by status").setRequired(false).addChoices.apply(o, infractionStatusChoices); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("staff")
+.setDescription("View infractions issued by a staff member")
+.addUserOption(function (o) { return o.setName("user").setDescription("Staff member").setRequired(true); });
+}),
+
 new SlashCommandBuilder().setName("leaderboard").setDescription("View shift leaderboard"),
 
 new SlashCommandBuilder().setName("warn").setDescription("Warn a user")
-.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
-.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
-
-new SlashCommandBuilder().setName("infract").setDescription("Create an infraction")
 .addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
 .addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false); }),
 
@@ -334,7 +443,6 @@ const row = await get("SELECT value FROM config WHERE key = ?", [key]);
 if (!row) return null;
 return row.value;
 }
-
 async function getAutoRoles() {
 return await all("SELECT roleId FROM autoroles");
 }
@@ -363,12 +471,16 @@ return { ok: true, message: "Auto-role removed." };
 
 async function createCase(type, userId, officerId, reason, duration, extra) {
 const now = Date.now();
-const arrestLocation = extra && extra.arrestLocation ? extra.arrestLocation : null;
-const mugshotUrl = extra && extra.mugshotUrl ? extra.mugshotUrl : null;
+const safeExtra = extra || {};
+const arrestLocation = safeExtra.arrestLocation || null;
+const mugshotUrl = safeExtra.mugshotUrl || null;
+const evidenceUrl = safeExtra.evidenceUrl || null;
+const punishment = safeExtra.punishment || null;
+const notes = safeExtra.notes || null;
 
 const result = await run(
-"INSERT INTO cases (type, userId, officerId, reason, duration, createdAt, arrestLocation, mugshotUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-[type, userId, officerId, reason || "No reason", duration || null, now, arrestLocation, mugshotUrl]
+"INSERT INTO cases (type, userId, officerId, reason, duration, createdAt, arrestLocation, mugshotUrl, status, evidenceUrl, punishment, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+[type, userId, officerId, reason || "No reason", duration || null, now, arrestLocation, mugshotUrl, "active", evidenceUrl, punishment, notes]
 );
 
 return {
@@ -380,26 +492,42 @@ reason: reason || "No reason",
 duration: duration || null,
 createdAt: now,
 arrestLocation: arrestLocation,
-mugshotUrl: mugshotUrl
+mugshotUrl: mugshotUrl,
+status: "active",
+evidenceUrl: evidenceUrl,
+punishment: punishment,
+notes: notes
 };
 }
 
 function caseEmbed(item) {
 const userValue = item.type === "ARREST" ? item.userId : "<@" + item.userId + ">";
+const status = item.status || "active";
+const color = status === "voided" ? 0xe74c3c : 0x2b2d31;
 
 const embed = new EmbedBuilder()
 .setTitle(item.type + " Case #" + item.caseNumber)
-.setColor(0x2b2d31)
+.setColor(color)
 .addFields(
 { name: "User", value: userValue, inline: true },
 { name: "Officer", value: "<@" + item.officerId + ">", inline: true },
+{ name: "Status", value: status.toUpperCase(), inline: true },
 { name: "Reason", value: item.reason || "No reason", inline: false }
 )
 .setFooter({ text: "Case Number: " + item.caseNumber })
-.setTimestamp();
+.setTimestamp(item.createdAt ? new Date(Number(item.createdAt)) : new Date());
 
+if (item.punishment) embed.addFields({ name: "Infraction Type", value: item.punishment, inline: true });
 if (item.duration) embed.addFields({ name: "Duration", value: item.duration, inline: true });
+if (item.evidenceUrl) embed.addFields({ name: "Evidence", value: item.evidenceUrl, inline: false });
+if (item.notes) embed.addFields({ name: "Notes", value: item.notes, inline: false });
 if (item.arrestLocation) embed.addFields({ name: "Arrest Location", value: item.arrestLocation, inline: false });
+if (status === "voided") {
+embed.addFields(
+{ name: "Voided By", value: item.voidedBy ? "<@" + item.voidedBy + ">" : "Unknown", inline: true },
+{ name: "Void Reason", value: item.voidReason || "No reason", inline: false }
+);
+}
 if (item.mugshotUrl) embed.setImage(item.mugshotUrl);
 
 return embed;
@@ -631,6 +759,492 @@ components: shiftButtons(interaction.user.id, updatedShift)
 });
 }
 
+function safeChannelName(name) {
+return name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 80);
+}
+
+async function getTicket(channelId) {
+return await get("SELECT * FROM tickets WHERE channelId = ? AND status = ?", [channelId, "open"]);
+}
+
+async function getOpenTicketByUser(userId) {
+return await get("SELECT * FROM tickets WHERE userId = ? AND status = ?", [userId, "open"]);
+}
+
+async function isTicketStaff(member, interaction) {
+if (hasLevel(member, "high", interaction)) return true;
+
+const staffRoleId = await getConfig("ticket_staff_role_id");
+if (!staffRoleId || !member || !member.roles || !member.roles.cache) return false;
+
+return member.roles.cache.has(staffRoleId);
+}
+
+function ticketPanelEmbed() {
+return new EmbedBuilder()
+.setTitle("Support Tickets")
+.setDescription("Need assistance? Open a ticket and a staff member will help you shortly.\n\nUse tickets for:\n• General Support\n• Player Reports\n• Internal Affairs\n• Management Support\n\nClick the button below to open a ticket.")
+.setColor(0x2b2d31)
+.setFooter({ text: "Sentinel Enforcement Authority" })
+.setTimestamp();
+}
+
+function ticketPanelButtons() {
+return [
+new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId("ticket_open").setLabel("Open Ticket").setEmoji("🎫").setStyle(ButtonStyle.Primary)
+)
+];
+}
+
+function ticketChannelEmbed(userId) {
+return new EmbedBuilder()
+.setTitle("Ticket Opened")
+.setDescription("Thank you for opening a ticket. A staff member will be with you shortly.\n\nPlease explain your issue with as much detail as possible.")
+.setColor(0x2b2d31)
+.addFields(
+{ name: "Opened By", value: "<@" + userId + ">", inline: true },
+{ name: "Status", value: "Open", inline: true },
+{ name: "Claimed By", value: "Not claimed", inline: true }
+)
+.setFooter({ text: "Sentinel Enforcement Authority Tickets" })
+.setTimestamp();
+}
+
+function ticketChannelButtons() {
+return [
+new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim Ticket").setEmoji("📌").setStyle(ButtonStyle.Success),
+new ButtonBuilder().setCustomId("ticket_close").setLabel("Close Ticket").setEmoji("🔒").setStyle(ButtonStyle.Danger)
+)
+];
+}
+
+async function sendTicketLog(embed) {
+const logsId = await getConfig("ticket_logs_channel_id");
+if (!logsId) return;
+
+const channel = await client.channels.fetch(logsId).catch(function () {
+return null;
+});
+
+if (!channel || !channel.isTextBased()) return;
+
+await channel.send({ embeds: [embed] }).catch(function () {});
+}
+
+async function sendTicketPanel(channel) {
+await channel.send({
+embeds: [ticketPanelEmbed()],
+components: ticketPanelButtons()
+});
+}
+
+async function createTicket(interaction) {
+const panelChannelId = await getConfig("ticket_panel_channel_id");
+const categoryId = await getConfig("ticket_category_id");
+const staffRoleId = await getConfig("ticket_staff_role_id");
+
+if (!panelChannelId || !categoryId || !staffRoleId) {
+return interaction.reply({ content: "Ticket system is not set up yet.", ephemeral: true });
+}
+
+const oldTicket = await getOpenTicketByUser(interaction.user.id);
+
+if (oldTicket) {
+const oldChannel = await interaction.guild.channels.fetch(oldTicket.channelId).catch(function () {
+return null;
+});
+
+if (oldChannel) {
+  return interaction.reply({ content: "You already have an open ticket: " + oldChannel.toString(), ephemeral: true });
+}
+
+await run("UPDATE tickets SET status = ?, closedAt = ? WHERE channelId = ?", ["closed", Date.now(), oldTicket.channelId]);
+
+}
+
+const baseName = safeChannelName("ticket-" + interaction.user.username);
+const channelName = baseName || "ticket-user";
+
+const channel = await interaction.guild.channels.create({
+name: channelName,
+type: ChannelType.GuildText,
+parent: categoryId,
+permissionOverwrites: [
+{ id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+{ id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks] },
+{ id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageMessages] },
+{ id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.EmbedLinks] }
+]
+});
+
+await run("INSERT INTO tickets (channelId, userId, claimedBy, status, createdAt, closedAt) VALUES (?, ?, ?, ?, ?, ?)", [channel.id, interaction.user.id, null, "open", Date.now(), null]);
+
+await channel.send({
+content: "<@" + interaction.user.id + "> <@&" + staffRoleId + ">",
+embeds: [ticketChannelEmbed(interaction.user.id)],
+components: ticketChannelButtons()
+});
+
+const logEmbed = new EmbedBuilder()
+.setTitle("Ticket Created")
+.setColor(0x2ecc71)
+.addFields(
+{ name: "User", value: "<@" + interaction.user.id + ">", inline: true },
+{ name: "Channel", value: channel.toString(), inline: true }
+)
+.setTimestamp();
+
+await sendTicketLog(logEmbed);
+
+return interaction.reply({ content: "Ticket created: " + channel.toString(), ephemeral: true });
+}
+
+async function claimTicket(interaction) {
+const member = await getCommandMember(interaction);
+const ticket = await getTicket(interaction.channel.id);
+
+if (!ticket) return interaction.reply({ content: "This is not an open ticket.", ephemeral: true });
+if (!(await isTicketStaff(member, interaction))) return interaction.reply({ content: "Ticket staff only.", ephemeral: true });
+if (ticket.claimedBy) return interaction.reply({ content: "This ticket is already claimed by <@" + ticket.claimedBy + ">.", ephemeral: true });
+
+await run("UPDATE tickets SET claimedBy = ? WHERE channelId = ?", [interaction.user.id, interaction.channel.id]);
+
+const embed = new EmbedBuilder()
+.setTitle("Ticket Claimed")
+.setDescription("This ticket has been claimed by <@" + interaction.user.id + ">.")
+.setColor(0x2ecc71)
+.setTimestamp();
+
+return interaction.reply({ embeds: [embed] });
+}
+
+async function closeTicket(interaction) {
+const member = await getCommandMember(interaction);
+const ticket = await getTicket(interaction.channel.id);
+
+if (!ticket) return interaction.reply({ content: "This is not an open ticket.", ephemeral: true });
+
+const staff = await isTicketStaff(member, interaction);
+const owner = interaction.user.id === ticket.userId;
+
+if (!staff && !owner) {
+return interaction.reply({ content: "Only the ticket owner or ticket staff can close this ticket.", ephemeral: true });
+}
+
+await run("UPDATE tickets SET status = ?, closedAt = ? WHERE channelId = ?", ["closed", Date.now(), interaction.channel.id]);
+
+const logEmbed = new EmbedBuilder()
+.setTitle("Ticket Closed")
+.setColor(0xe74c3c)
+.addFields(
+{ name: "Opened By", value: "<@" + ticket.userId + ">", inline: true },
+{ name: "Closed By", value: "<@" + interaction.user.id + ">", inline: true },
+{ name: "Channel", value: interaction.channel.name, inline: true }
+)
+.setTimestamp();
+
+await sendTicketLog(logEmbed);
+await interaction.reply({ content: "Closing this ticket in 5 seconds..." });
+
+setTimeout(function () {
+interaction.channel.delete("Ticket closed").catch(function () {});
+}, 5000);
+}
+
+async function handleTicket(interaction, member) {
+const sub = interaction.options.getSubcommand();
+
+if (sub === "setup") {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const panelChannel = interaction.options.getChannel("panel_channel");
+const category = interaction.options.getChannel("category");
+const staffRole = interaction.options.getRole("staff_role");
+const logs = interaction.options.getChannel("logs");
+
+if (!panelChannel || !panelChannel.isTextBased()) return interaction.reply({ content: "Panel channel must be a text channel.", ephemeral: true });
+if (!logs || !logs.isTextBased()) return interaction.reply({ content: "Logs channel must be a text channel.", ephemeral: true });
+if (!category || category.type !== ChannelType.GuildCategory) return interaction.reply({ content: "Category must be a category channel.", ephemeral: true });
+
+await setConfig("ticket_panel_channel_id", panelChannel.id);
+await setConfig("ticket_category_id", category.id);
+await setConfig("ticket_staff_role_id", staffRole.id);
+await setConfig("ticket_logs_channel_id", logs.id);
+
+await sendTicketPanel(panelChannel);
+
+return interaction.reply({ content: "Ticket system set up and panel sent in " + panelChannel.toString() + ".", ephemeral: true });
+
+}
+
+if (sub === "panel") {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const panelChannelId = await getConfig("ticket_panel_channel_id");
+if (!panelChannelId) return interaction.reply({ content: "Ticket system is not set up yet.", ephemeral: true });
+
+const channel = await interaction.guild.channels.fetch(panelChannelId).catch(function () {
+  return null;
+});
+
+if (!channel || !channel.isTextBased()) return interaction.reply({ content: "Ticket panel channel was not found.", ephemeral: true });
+
+await sendTicketPanel(channel);
+return interaction.reply({ content: "Ticket panel sent.", ephemeral: true });
+
+}
+
+if (sub === "close") return await closeTicket(interaction);
+
+if (sub === "add") {
+const ticket = await getTicket(interaction.channel.id);
+if (!ticket) return interaction.reply({ content: "This is not an open ticket.", ephemeral: true });
+if (!(await isTicketStaff(member, interaction))) return interaction.reply({ content: "Ticket staff only.", ephemeral: true });
+
+const user = interaction.options.getUser("user");
+
+await interaction.channel.permissionOverwrites.edit(user.id, {
+  ViewChannel: true,
+  SendMessages: true,
+  ReadMessageHistory: true,
+  AttachFiles: true,
+  EmbedLinks: true
+});
+
+return interaction.reply({ content: "Added <@" + user.id + "> to this ticket." });
+
+}
+
+if (sub === "remove") {
+const ticket = await getTicket(interaction.channel.id);
+if (!ticket) return interaction.reply({ content: "This is not an open ticket.", ephemeral: true });
+if (!(await isTicketStaff(member, interaction))) return interaction.reply({ content: "Ticket staff only.", ephemeral: true });
+
+const user = interaction.options.getUser("user");
+
+if (user.id === ticket.userId) return interaction.reply({ content: "You cannot remove the ticket owner.", ephemeral: true });
+
+await interaction.channel.permissionOverwrites.delete(user.id).catch(function () {});
+
+return interaction.reply({ content: "Removed <@" + user.id + "> from this ticket." });
+
+}
+}
+async function handleTicketButton(interaction) {
+if (interaction.customId === "ticket_open") return await createTicket(interaction);
+if (interaction.customId === "ticket_claim") return await claimTicket(interaction);
+if (interaction.customId === "ticket_close") return await closeTicket(interaction);
+}
+
+function isInfractionCase(item) {
+return item && item.type === "INFRACTION";
+}
+
+async function getInfractionCase(caseNumber) {
+return await get("SELECT * FROM cases WHERE caseNumber = ? AND type = ?", [caseNumber, "INFRACTION"]);
+}
+
+function infractionListText(rows) {
+if (!rows.length) return "No infractions found.";
+
+return rows.map(function (row) {
+const status = (row.status || "active").toUpperCase();
+const punishment = row.punishment ? row.punishment : "Infraction";
+return "#" + row.caseNumber + " [" + status + "] " + punishment + " - <@" + row.userId + "> - " + row.reason;
+}).join("\n").slice(0, 4000);
+}
+
+async function handleInfract(interaction, member) {
+const sub = interaction.options.getSubcommand();
+
+if (sub === "create") {
+if (!hasInfract(member, interaction)) {
+return interaction.reply({ content: "You need the Infract permission role.", ephemeral: true });
+}
+
+const target = interaction.options.getUser("user");
+const targetMember = await getTargetMember(interaction);
+const punishment = interaction.options.getString("type");
+const reason = interaction.options.getString("reason");
+const evidence = interaction.options.getString("evidence");
+const note = interaction.options.getString("note");
+
+if (!canAct(member, targetMember, interaction)) {
+  return interaction.reply({ content: "You cannot infract this user.", ephemeral: true });
+}
+
+const item = await createCase("INFRACTION", target.id, interaction.user.id, reason, null, {
+  evidenceUrl: evidence || null,
+  punishment: punishment,
+  notes: note || null
+});
+
+const embed = caseEmbed(item);
+await sendLog(embed);
+
+return interaction.reply({ content: "Infraction created. Case #" + item.caseNumber, embeds: [embed] });
+
+}
+
+if (sub === "lookup") {
+if (!hasLevel(member, "staff", interaction)) {
+return interaction.reply({ content: "Staff only.", ephemeral: true });
+}
+
+const caseNumber = interaction.options.getInteger("case");
+const item = await getInfractionCase(caseNumber);
+
+if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
+
+return interaction.reply({ embeds: [caseEmbed(item)] });
+
+}
+
+if (sub === "history") {
+if (!hasLevel(member, "staff", interaction)) {
+return interaction.reply({ content: "Staff only.", ephemeral: true });
+}
+
+const target = interaction.options.getUser("user");
+const status = interaction.options.getString("status") || "active";
+let rows;
+
+if (status === "all") {
+  rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION"]);
+} else {
+  rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION", status]);
+}
+
+const embed = new EmbedBuilder()
+  .setTitle("Infraction History for " + target.tag)
+  .setColor(0x2b2d31)
+  .setDescription(infractionListText(rows))
+  .setTimestamp();
+
+return interaction.reply({ embeds: [embed] });
+
+}
+
+if (sub === "void") {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const caseNumber = interaction.options.getInteger("case");
+const reason = interaction.options.getString("reason");
+const item = await getInfractionCase(caseNumber);
+
+if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
+if ((item.status || "active") === "voided") return interaction.reply({ content: "That infraction is already voided.", ephemeral: true });
+
+await run("UPDATE cases SET status = ?, voidedBy = ?, voidReason = ?, voidedAt = ? WHERE caseNumber = ?", ["voided", interaction.user.id, reason, Date.now(), caseNumber]);
+
+const updated = await getInfractionCase(caseNumber);
+const embed = caseEmbed(updated);
+await sendLog(embed);
+
+return interaction.reply({ content: "Infraction #" + caseNumber + " has been voided.", embeds: [embed] });
+
+}
+
+if (sub === "edit") {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const caseNumber = interaction.options.getInteger("case");
+const newReason = interaction.options.getString("reason");
+const newType = interaction.options.getString("type");
+const newEvidence = interaction.options.getString("evidence");
+const item = await getInfractionCase(caseNumber);
+
+if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
+
+await run(
+  "UPDATE cases SET reason = COALESCE(?, reason), punishment = COALESCE(?, punishment), evidenceUrl = COALESCE(?, evidenceUrl) WHERE caseNumber = ?",
+  [newReason, newType, newEvidence, caseNumber]
+);
+
+const updated = await getInfractionCase(caseNumber);
+const embed = caseEmbed(updated);
+await sendLog(embed);
+
+return interaction.reply({ content: "Infraction #" + caseNumber + " updated.", embeds: [embed] });
+
+}
+
+if (sub === "note") {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const caseNumber = interaction.options.getInteger("case");
+const note = interaction.options.getString("note");
+const item = await getInfractionCase(caseNumber);
+
+if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
+
+const oldNotes = item.notes ? item.notes + "\n" : "";
+const newNotes = oldNotes + "[" + interaction.user.tag + "] " + note;
+
+await run("UPDATE cases SET notes = ? WHERE caseNumber = ?", [newNotes, caseNumber]);
+
+const updated = await getInfractionCase(caseNumber);
+const embed = caseEmbed(updated);
+
+return interaction.reply({ content: "Note added to infraction #" + caseNumber + ".", embeds: [embed] });
+
+}
+
+if (sub === "list") {
+if (!hasLevel(member, "staff", interaction)) {
+return interaction.reply({ content: "Staff only.", ephemeral: true });
+}
+
+const status = interaction.options.getString("status") || "active";
+let rows;
+
+if (status === "all") {
+  rows = await all("SELECT * FROM cases WHERE type = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION"]);
+} else {
+  rows = await all("SELECT * FROM cases WHERE type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION", status]);
+}
+
+const embed = new EmbedBuilder()
+  .setTitle("Recent Infractions")
+  .setColor(0x2b2d31)
+  .setDescription(infractionListText(rows))
+  .setTimestamp();
+
+return interaction.reply({ embeds: [embed] });
+
+}
+
+if (sub === "staff") {
+if (!hasLevel(member, "staff", interaction)) {
+return interaction.reply({ content: "Staff only.", ephemeral: true });
+}
+
+const staffUser = interaction.options.getUser("user");
+const rows = await all("SELECT * FROM cases WHERE officerId = ? AND type = ? ORDER BY caseNumber DESC LIMIT 15", [staffUser.id, "INFRACTION"]);
+
+const embed = new EmbedBuilder()
+  .setTitle("Infractions Issued by " + staffUser.tag)
+  .setColor(0x2b2d31)
+  .setDescription(infractionListText(rows))
+  .setTimestamp();
+
+return interaction.reply({ embeds: [embed] });
+
+}
+}
+
 async function handleHelp(interaction) {
 const embed = new EmbedBuilder()
 .setTitle("SEA Bot Commands")
@@ -638,13 +1252,24 @@ const embed = new EmbedBuilder()
 .setDescription([
 "/help - Show commands",
 "/shift manage - Open shift panel",
+"/ticket setup - Set up Ticket Tool style tickets",
+"/ticket panel - Send ticket panel again",
+"/ticket close - Close current ticket",
+"/ticket add/remove - Add or remove users from a ticket",
+"/infract create - Create an infraction",
+"/infract lookup - Look up an infraction",
+"/infract history - View a user's infractions",
+"/infract void - Void an infraction",
+"/infract edit - Edit an infraction",
+"/infract note - Add a note to an infraction",
+"/infract list - List recent infractions",
+"/infract staff - View infractions issued by staff",
 "/embed send - Send a custom embed",
 "/welcome set/off/test - Manage welcome messages",
 "/autorole add/remove/list - Manage auto roles",
 "/log arrest - Log an arrest",
 "/leaderboard - Shift leaderboard",
 "/warn - Warn a user",
-"/infract - Create infraction",
 "/kick - Kick user",
 "/ban - Ban user",
 "/mute - Timeout user",
@@ -879,7 +1504,6 @@ if (command === "kick" && !hasLevel(member, "mod", interaction)) return interact
 if (command === "mute" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
 if (command === "unmute" && !hasLevel(member, "mod", interaction)) return interaction.reply({ content: "Mods+ only.", ephemeral: true });
 if (command === "ban" && !hasLevel(member, "admin", interaction)) return interaction.reply({ content: "Admins+ only.", ephemeral: true });
-if (command === "infract" && !hasInfract(member, interaction)) return interaction.reply({ content: "You need the Infract permission role.", ephemeral: true });
 if (!canAct(member, targetMember, interaction)) return interaction.reply({ content: "You cannot moderate this user.", ephemeral: true });
 
 if (command === "kick") {
@@ -912,7 +1536,7 @@ if (!targetMember.moderatable) return interaction.reply({ content: "I cannot unm
 await targetMember.timeout(null, reason);
 }
 
-const type = command === "infract" ? "INFRACTION" : command.toUpperCase();
+const type = command.toUpperCase();
 const item = await createCase(type, target.id, interaction.user.id, reason, null, null);
 const embed = caseEmbed(item);
 await sendLog(embed);
@@ -946,13 +1570,14 @@ const embed = new EmbedBuilder()
 .setTitle("History for " + target.tag)
 .setColor(0x2b2d31)
 .setDescription(rows.map(function (row) {
-return "#" + row.caseNumber + " [" + row.type + "] " + row.reason;
+const status = row.status ? " [" + row.status.toUpperCase() + "]" : "";
+return "#" + row.caseNumber + " [" + row.type + "]" + status + " " + row.reason;
 }).join("\n"));
 
 return interaction.reply({ embeds: [embed] });
 }
 
-client.once("clientReady", async function () {
+client.once("ready", async function () {
 try {
 await setupDatabase();
 await loadPermissions();
@@ -976,6 +1601,7 @@ client.on("interactionCreate", async function (interaction) {
 try {
 if (interaction.isButton()) {
 if (interaction.customId.startsWith("shift_")) return await handleShiftButton(interaction);
+if (interaction.customId.startsWith("ticket_")) return await handleTicketButton(interaction);
 return;
 }
 
@@ -992,8 +1618,10 @@ if (command === "perm") return await handlePerm(interaction, member);
 if (command === "config") return await handleConfig(interaction, member);
 if (command === "shift") return await handleShift(interaction, member);
 if (command === "log") return await handleLog(interaction, member);
+if (command === "ticket") return await handleTicket(interaction, member);
+if (command === "infract") return await handleInfract(interaction, member);
 if (command === "leaderboard") return await handleLeaderboard(interaction, member);
-if (command === "warn" || command === "infract" || command === "kick" || command === "ban" || command === "mute" || command === "unmute") return await handleModeration(interaction, member, command);
+if (command === "warn" || command === "kick" || command === "ban" || command === "mute" || command === "unmute") return await handleModeration(interaction, member, command);
 if (command === "case") return await handleCase(interaction, member);
 if (command === "history") return await handleHistory(interaction, member);
 
