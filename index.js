@@ -95,6 +95,20 @@ await run("CREATE TABLE IF NOT EXISTS shifts (id INTEGER PRIMARY KEY AUTOINCREME
 await addColumnIfMissing("shifts", "startedAt", "INTEGER");
 await addColumnIfMissing("shifts", "endedAt", "INTEGER");
 
+await run("CREATE TABLE IF NOT EXISTS shift_edits (id INTEGER PRIMARY KEY AUTOINCREMENT, userId TEXT NOT NULL, adminId TEXT NOT NULL, minutes INTEGER NOT NULL, reason TEXT, type TEXT, createdAt INTEGER NOT NULL)");
+
+await addColumnIfMissing("shift_edits", "adminId", "TEXT");
+await addColumnIfMissing("shift_edits", "minutes", "INTEGER DEFAULT 0");
+await addColumnIfMissing("shift_edits", "reason", "TEXT");
+await addColumnIfMissing("shift_edits", "type", "TEXT");
+await addColumnIfMissing("shift_edits", "createdAt", "INTEGER");
+
+await run("CREATE TABLE IF NOT EXISTS shift_quotas (userId TEXT PRIMARY KEY, quotaMinutes INTEGER NOT NULL DEFAULT 0, updatedBy TEXT, updatedAt INTEGER)");
+
+await addColumnIfMissing("shift_quotas", "quotaMinutes", "INTEGER DEFAULT 0");
+await addColumnIfMissing("shift_quotas", "updatedBy", "TEXT");
+await addColumnIfMissing("shift_quotas", "updatedAt", "INTEGER");
+
 await run("CREATE TABLE IF NOT EXISTS tickets (channelId TEXT PRIMARY KEY, userId TEXT NOT NULL, claimedBy TEXT, status TEXT DEFAULT 'open', createdAt INTEGER NOT NULL, closedAt INTEGER)");
 
 await addColumnIfMissing("tickets", "claimedBy", "TEXT");
@@ -213,7 +227,52 @@ return sub.setName("onduty").setDescription("Set On-Duty role").addRoleOption(fu
 new SlashCommandBuilder()
 .setName("shift")
 .setDescription("Shift system")
-.addSubcommand(function (sub) { return sub.setName("manage").setDescription("Open shift panel"); }),
+.addSubcommand(function (sub) {
+return sub.setName("manage").setDescription("Open shift panel");
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("forceoff")
+.setDescription("Admin+ force a user off shift")
+.addUserOption(function (o) { return o.setName("user").setDescription("User to force off shift").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("addtime")
+.setDescription("Admin+ add shift time to a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addIntegerOption(function (o) { return o.setName("minutes").setDescription("Minutes to add").setRequired(true).setMinValue(1).setMaxValue(100000); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("removetime")
+.setDescription("Admin+ remove shift time from a user")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addIntegerOption(function (o) { return o.setName("minutes").setDescription("Minutes to remove").setRequired(true).setMinValue(1).setMaxValue(100000); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("quota")
+.setDescription("Admin+ set default or user shift quota")
+.addIntegerOption(function (o) { return o.setName("minutes").setDescription("Quota minutes").setRequired(true).setMinValue(0).setMaxValue(100000); })
+.addUserOption(function (o) { return o.setName("user").setDescription("Optional user quota. Leave blank for default quota.").setRequired(false); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("view")
+.setDescription("Admin+ view a user's shift stats")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); });
+})
+.addSubcommand(function (sub) {
+return sub
+.setName("reset")
+.setDescription("Admin+ reset a user's shift data")
+.addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
+}),
 
 new SlashCommandBuilder()
 .setName("log")
@@ -600,6 +659,15 @@ if (hours > 0) return hours + "h " + minutes + "m";
 return minutes + "m";
 }
 
+function formatMinutes(minutes) {
+const safeMinutes = Math.max(0, Math.floor(Number(minutes || 0)));
+const hours = Math.floor(safeMinutes / 60);
+const mins = safeMinutes % 60;
+
+if (hours > 0) return hours + "h " + mins + "m";
+return mins + "m";
+}
+
 function formatLeaderboardTime(ms) {
 if (!ms || ms <= 0) return "0s";
 
@@ -635,6 +703,78 @@ return totalBreakMs;
 function getShiftActiveMs(shift) {
 if (!shift) return 0;
 return Math.max(0, Date.now() - Number(shift.startedAt) - getShiftBreakMs(shift));
+}
+
+async function getDefaultQuotaMinutes() {
+const value = await getConfig("shift_default_quota_minutes");
+return Number(value || 0);
+}
+
+async function getUserQuotaMinutes(userId) {
+const row = await get("SELECT quotaMinutes FROM shift_quotas WHERE userId = ?", [userId]);
+
+if (row) return Number(row.quotaMinutes || 0);
+return await getDefaultQuotaMinutes();
+}
+
+async function getShiftStats(userId) {
+const completed = await get(
+"SELECT COUNT(*) as shiftCount, SUM(minutes) as totalMinutes, AVG(minutes) as avgMinutes, MAX(minutes) as longestShift, MAX(endedAt) as lastShift FROM shifts WHERE userId = ?",
+[userId]
+);
+
+const edits = await get(
+"SELECT SUM(minutes) as editMinutes FROM shift_edits WHERE userId = ?",
+[userId]
+);
+
+const activeShift = await getActiveShift(userId);
+const quotaMinutes = await getUserQuotaMinutes(userId);
+
+const completedMinutes = Number(completed && completed.totalMinutes ? completed.totalMinutes : 0);
+const editMinutes = Number(edits && edits.editMinutes ? edits.editMinutes : 0);
+const totalMinutes = Math.max(0, completedMinutes + editMinutes);
+const activeMinutes = Math.floor(getShiftActiveMs(activeShift) / 60000);
+const remainingMinutes = Math.max(0, quotaMinutes - totalMinutes);
+
+return {
+shiftCount: Number(completed && completed.shiftCount ? completed.shiftCount : 0),
+completedMinutes: completedMinutes,
+editMinutes: editMinutes,
+totalMinutes: totalMinutes,
+activeMinutes: activeMinutes,
+avgMinutes: Number(completed && completed.avgMinutes ? completed.avgMinutes : 0),
+longestShift: Number(completed && completed.longestShift ? completed.longestShift : 0),
+lastShift: completed ? completed.lastShift : null,
+activeShift: activeShift,
+quotaMinutes: quotaMinutes,
+remainingMinutes: remainingMinutes
+};
+}
+
+async function logShiftEdit(userId, adminId, minutes, type, reason) {
+await run(
+"INSERT INTO shift_edits (userId, adminId, minutes, reason, type, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+[userId, adminId, minutes, reason || "No reason", type, Date.now()]
+);
+}
+
+async function shiftEditLog(title, targetId, adminId, fields) {
+const embed = new EmbedBuilder()
+.setTitle(title)
+.setColor(0x2b2d31)
+.addFields(
+{ name: "User", value: "<@" + targetId + ">", inline: true },
+{ name: "Edited By", value: "<@" + adminId + ">", inline: true }
+)
+.setTimestamp();
+
+for (const field of fields) {
+embed.addFields(field);
+}
+
+await sendLog(embed);
+return embed;
 }
 
 function shiftEmbed(user, shift, notice) {
@@ -1317,6 +1457,12 @@ const embed = new EmbedBuilder()
 .setDescription([
 "/help - Show commands",
 "/shift manage - Open shift panel",
+"/shift forceoff - Admin+ force a user off shift",
+"/shift addtime - Admin+ add shift time",
+"/shift removetime - Admin+ remove shift time",
+"/shift quota - Admin+ set default/user quota",
+"/shift view - Admin+ view shift stats",
+"/shift reset - Admin+ reset shift data",
 "/ticket setup - Set up Ticket Tool style tickets",
 "/ticket panel - Send ticket panel again",
 "/ticket close - Close current ticket",
@@ -1504,6 +1650,9 @@ return interaction.reply({ content: "On-Duty role set to " + role.toString() + "
 }
 
 async function handleShift(interaction, member) {
+const sub = interaction.options.getSubcommand();
+
+if (sub === "manage") {
 if (!hasLevel(member, "staff", interaction)) {
 return interaction.reply({ content: "Staff only.", ephemeral: true });
 }
@@ -1515,6 +1664,150 @@ embeds: [shiftEmbed(interaction.user, shift, null)],
 components: shiftButtons(interaction.user.id, shift),
 ephemeral: true
 });
+}
+
+if (!hasLevel(member, "admin", interaction)) {
+return interaction.reply({ content: "Admin+ only.", ephemeral: true });
+}
+
+if (sub === "forceoff") {
+const user = interaction.options.getUser("user");
+const reason = interaction.options.getString("reason") || "No reason";
+const shift = await getActiveShift(user.id);
+
+if (!shift) {
+return interaction.reply({ content: "That user is not on shift.", ephemeral: true });
+}
+
+let totalBreakMs = Number(shift.totalBreakMs || 0);
+
+if (shift.status === "break" && shift.breakStartedAt) {
+totalBreakMs += Date.now() - Number(shift.breakStartedAt);
+}
+
+const endedAt = Date.now();
+const activeMs = Math.max(0, endedAt - Number(shift.startedAt) - totalBreakMs);
+const minutes = Math.max(1, Math.floor(activeMs / 60000));
+
+await run("INSERT INTO shifts (userId, startedAt, endedAt, minutes) VALUES (?, ?, ?, ?)", [user.id, Number(shift.startedAt), endedAt, minutes]);
+await run("DELETE FROM active_shifts WHERE userId = ?", [user.id]);
+await setOnDuty(interaction.guild, user.id, false);
+
+const embed = await shiftEditLog("Shift Force Ended", user.id, interaction.user.id, [
+{ name: "Logged Time", value: formatMinutes(minutes), inline: true },
+{ name: "Reason", value: reason, inline: false }
+]);
+
+return interaction.reply({ content: "Forced <@" + user.id + "> off shift and logged " + formatMinutes(minutes) + ".", embeds: [embed] });
+}
+
+if (sub === "addtime") {
+const user = interaction.options.getUser("user");
+const minutes = interaction.options.getInteger("minutes");
+const reason = interaction.options.getString("reason") || "No reason";
+
+await logShiftEdit(user.id, interaction.user.id, minutes, "add", reason);
+
+const embed = await shiftEditLog("Shift Time Added", user.id, interaction.user.id, [
+{ name: "Added Time", value: formatMinutes(minutes), inline: true },
+{ name: "Reason", value: reason, inline: false }
+]);
+
+return interaction.reply({ content: "Added " + formatMinutes(minutes) + " to <@" + user.id + ">.", embeds: [embed] });
+}
+
+if (sub === "removetime") {
+const user = interaction.options.getUser("user");
+const minutes = interaction.options.getInteger("minutes");
+const reason = interaction.options.getString("reason") || "No reason";
+
+await logShiftEdit(user.id, interaction.user.id, -minutes, "remove", reason);
+
+const embed = await shiftEditLog("Shift Time Removed", user.id, interaction.user.id, [
+{ name: "Removed Time", value: formatMinutes(minutes), inline: true },
+{ name: "Reason", value: reason, inline: false }
+]);
+
+return interaction.reply({ content: "Removed " + formatMinutes(minutes) + " from <@" + user.id + ">.", embeds: [embed] });
+}
+
+if (sub === "quota") {
+const minutes = interaction.options.getInteger("minutes");
+const user = interaction.options.getUser("user");
+
+if (user) {
+await run(
+"INSERT INTO shift_quotas (userId, quotaMinutes, updatedBy, updatedAt) VALUES (?, ?, ?, ?) ON CONFLICT(userId) DO UPDATE SET quotaMinutes = excluded.quotaMinutes, updatedBy = excluded.updatedBy, updatedAt = excluded.updatedAt",
+[user.id, minutes, interaction.user.id, Date.now()]
+);
+
+const embed = await shiftEditLog("User Shift Quota Updated", user.id, interaction.user.id, [
+{ name: "New Quota", value: formatMinutes(minutes), inline: true }
+]);
+
+return interaction.reply({ content: "Set <@" + user.id + ">'s quota to " + formatMinutes(minutes) + ".", embeds: [embed] });
+}
+
+await setConfig("shift_default_quota_minutes", String(minutes));
+
+const embed = new EmbedBuilder()
+.setTitle("Default Shift Quota Updated")
+.setColor(0x2b2d31)
+.addFields(
+{ name: "New Default Quota", value: formatMinutes(minutes), inline: true },
+{ name: "Updated By", value: "<@" + interaction.user.id + ">", inline: true }
+)
+.setTimestamp();
+
+await sendLog(embed);
+
+return interaction.reply({ content: "Default shift quota set to " + formatMinutes(minutes) + ".", embeds: [embed] });
+}
+
+if (sub === "view") {
+const user = interaction.options.getUser("user");
+const stats = await getShiftStats(user.id);
+
+let status = "Off Duty";
+
+if (stats.activeShift) {
+status = stats.activeShift.status === "break" ? "On Break" : "On Shift";
+}
+
+const embed = new EmbedBuilder()
+.setTitle("Shift Stats for " + user.tag)
+.setColor(0x2b2d31)
+.addFields(
+{ name: "Status", value: status, inline: true },
+{ name: "Total Logged", value: formatMinutes(stats.totalMinutes), inline: true },
+{ name: "Active Shift Time", value: formatMinutes(stats.activeMinutes), inline: true },
+{ name: "Quota", value: formatMinutes(stats.quotaMinutes), inline: true },
+{ name: "Remaining", value: formatMinutes(stats.remainingMinutes), inline: true },
+{ name: "Completed Shifts", value: String(stats.shiftCount), inline: true },
+{ name: "Manual Adjustments", value: (stats.editMinutes >= 0 ? "+" : "-") + formatMinutes(Math.abs(stats.editMinutes)), inline: true },
+{ name: "Longest Shift", value: formatMinutes(stats.longestShift), inline: true },
+{ name: "Last Shift", value: stats.lastShift ? "<t:" + Math.floor(Number(stats.lastShift) / 1000) + ":R>" : "Unknown", inline: true }
+)
+.setTimestamp();
+
+return interaction.reply({ embeds: [embed] });
+}
+
+if (sub === "reset") {
+const user = interaction.options.getUser("user");
+const reason = interaction.options.getString("reason") || "No reason";
+
+await run("DELETE FROM active_shifts WHERE userId = ?", [user.id]);
+await run("DELETE FROM shifts WHERE userId = ?", [user.id]);
+await run("DELETE FROM shift_edits WHERE userId = ?", [user.id]);
+await setOnDuty(interaction.guild, user.id, false);
+
+const embed = await shiftEditLog("Shift Data Reset", user.id, interaction.user.id, [
+{ name: "Reason", value: reason, inline: false }
+]);
+
+return interaction.reply({ content: "Reset all shift data for <@" + user.id + ">.", embeds: [embed] });
+}
 }
 
 async function handleLog(interaction, member) {
