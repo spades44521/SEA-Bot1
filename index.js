@@ -23,7 +23,7 @@ process.exit(1);
 }
 
 const client = new Client({
-intents: [GatewayIntentBits.Guilds]
+intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
 const db = new sqlite3.Database("./erlc.db");
@@ -311,6 +311,16 @@ return sub
 .addUserOption(function (o) { return o.setName("user").setDescription("Staff member").setRequired(true); });
 }),
 
+new SlashCommandBuilder()
+.setName("promote")
+.setDescription("Log a staff promotion")
+.addUserOption(function (o) { return o.setName("user").setDescription("User being promoted").setRequired(true); })
+.addStringOption(function (o) { return o.setName("current_rank").setDescription("Their current rank").setRequired(true).setMaxLength(100); })
+.addStringOption(function (o) { return o.setName("new_rank").setDescription("Their new rank").setRequired(true).setMaxLength(100); })
+.addStringOption(function (o) { return o.setName("reason").setDescription("Reason for promotion").setRequired(true).setMaxLength(1000); })
+.addStringOption(function (o) { return o.setName("evidence").setDescription("Evidence URL").setRequired(false).setMaxLength(1000); })
+.addStringOption(function (o) { return o.setName("note").setDescription("Extra note").setRequired(false).setMaxLength(1000); }),
+
 new SlashCommandBuilder().setName("leaderboard").setDescription("View shift leaderboard"),
 
 new SlashCommandBuilder().setName("warn").setDescription("Warn a user")
@@ -590,6 +600,22 @@ if (hours > 0) return hours + "h " + minutes + "m";
 return minutes + "m";
 }
 
+function formatLeaderboardTime(ms) {
+if (!ms || ms <= 0) return "0s";
+
+const totalSeconds = Math.floor(ms / 1000);
+const hours = Math.floor(totalSeconds / 3600);
+const minutes = Math.floor((totalSeconds % 3600) / 60);
+const seconds = totalSeconds % 60;
+
+let parts = [];
+if (hours > 0) parts.push(hours + "h");
+if (minutes > 0 || hours > 0) parts.push(minutes + "m");
+parts.push(seconds + "s");
+
+return parts.join(" ");
+}
+
 async function getActiveShift(userId) {
 return await get("SELECT * FROM active_shifts WHERE userId = ?", [userId]);
 }
@@ -722,11 +748,10 @@ notice = "You are not on break.";
 const currentBreakMs = Date.now() - Number(shift.breakStartedAt);
 const newTotalBreakMs = Number(shift.totalBreakMs || 0) + currentBreakMs;
 
-  await run("UPDATE active_shifts SET status = ?, breakStartedAt = ?, totalBreakMs = ? WHERE userId = ?", ["active", null, newTotalBreakMs, interaction.user.id]);
-  await setOnDuty(interaction.guild, interaction.user.id, true);
-  notice = "Break ended.";
+await run("UPDATE active_shifts SET status = ?, breakStartedAt = ?, totalBreakMs = ? WHERE userId = ?", ["active", null, newTotalBreakMs, interaction.user.id]);
+await setOnDuty(interaction.guild, interaction.user.id, true);
+notice = "Break ended.";
 }
-
 }
 
 if (action === "end") {
@@ -735,20 +760,19 @@ notice = "You are not on shift.";
 } else {
 let totalBreakMs = Number(shift.totalBreakMs || 0);
 
-  if (shift.status === "break" && shift.breakStartedAt) {
-    totalBreakMs += Date.now() - Number(shift.breakStartedAt);
-  }
-
-  const endedAt = Date.now();
-  const activeMs = Math.max(0, endedAt - Number(shift.startedAt) - totalBreakMs);
-  const minutes = Math.max(1, Math.floor(activeMs / 60000));
-
-  await run("INSERT INTO shifts (userId, startedAt, endedAt, minutes) VALUES (?, ?, ?, ?)", [interaction.user.id, Number(shift.startedAt), endedAt, minutes]);
-  await run("DELETE FROM active_shifts WHERE userId = ?", [interaction.user.id]);
-  await setOnDuty(interaction.guild, interaction.user.id, false);
-  notice = "Shift ended. Logged " + minutes + " minutes.";
+if (shift.status === "break" && shift.breakStartedAt) {
+totalBreakMs += Date.now() - Number(shift.breakStartedAt);
 }
 
+const endedAt = Date.now();
+const activeMs = Math.max(0, endedAt - Number(shift.startedAt) - totalBreakMs);
+const minutes = Math.max(1, Math.floor(activeMs / 60000));
+
+await run("INSERT INTO shifts (userId, startedAt, endedAt, minutes) VALUES (?, ?, ?, ?)", [interaction.user.id, Number(shift.startedAt), endedAt, minutes]);
+await run("DELETE FROM active_shifts WHERE userId = ?", [interaction.user.id]);
+await setOnDuty(interaction.guild, interaction.user.id, false);
+notice = "Shift ended. Logged " + minutes + " minutes.";
+}
 }
 
 const updatedShift = await getActiveShift(interaction.user.id);
@@ -857,11 +881,10 @@ return null;
 });
 
 if (oldChannel) {
-  return interaction.reply({ content: "You already have an open ticket: " + oldChannel.toString(), ephemeral: true });
+return interaction.reply({ content: "You already have an open ticket: " + oldChannel.toString(), ephemeral: true });
 }
 
 await run("UPDATE tickets SET status = ?, closedAt = ? WHERE channelId = ?", ["closed", Date.now(), oldTicket.channelId]);
-
 }
 
 const baseName = safeChannelName("ticket-" + interaction.user.username);
@@ -978,7 +1001,6 @@ await setConfig("ticket_logs_channel_id", logs.id);
 await sendTicketPanel(panelChannel);
 
 return interaction.reply({ content: "Ticket system set up and panel sent in " + panelChannel.toString() + ".", ephemeral: true });
-
 }
 
 if (sub === "panel") {
@@ -990,14 +1012,13 @@ const panelChannelId = await getConfig("ticket_panel_channel_id");
 if (!panelChannelId) return interaction.reply({ content: "Ticket system is not set up yet.", ephemeral: true });
 
 const channel = await interaction.guild.channels.fetch(panelChannelId).catch(function () {
-  return null;
+return null;
 });
 
 if (!channel || !channel.isTextBased()) return interaction.reply({ content: "Ticket panel channel was not found.", ephemeral: true });
 
 await sendTicketPanel(channel);
 return interaction.reply({ content: "Ticket panel sent.", ephemeral: true });
-
 }
 
 if (sub === "close") return await closeTicket(interaction);
@@ -1010,15 +1031,14 @@ if (!(await isTicketStaff(member, interaction))) return interaction.reply({ cont
 const user = interaction.options.getUser("user");
 
 await interaction.channel.permissionOverwrites.edit(user.id, {
-  ViewChannel: true,
-  SendMessages: true,
-  ReadMessageHistory: true,
-  AttachFiles: true,
-  EmbedLinks: true
+ViewChannel: true,
+SendMessages: true,
+ReadMessageHistory: true,
+AttachFiles: true,
+EmbedLinks: true
 });
 
 return interaction.reply({ content: "Added <@" + user.id + "> to this ticket." });
-
 }
 
 if (sub === "remove") {
@@ -1033,7 +1053,6 @@ if (user.id === ticket.userId) return interaction.reply({ content: "You cannot r
 await interaction.channel.permissionOverwrites.delete(user.id).catch(function () {});
 
 return interaction.reply({ content: "Removed <@" + user.id + "> from this ticket." });
-
 }
 }
 async function handleTicketButton(interaction) {
@@ -1076,20 +1095,19 @@ const evidence = interaction.options.getString("evidence");
 const note = interaction.options.getString("note");
 
 if (!canAct(member, targetMember, interaction)) {
-  return interaction.reply({ content: "You cannot infract this user.", ephemeral: true });
+return interaction.reply({ content: "You cannot infract this user.", ephemeral: true });
 }
 
 const item = await createCase("INFRACTION", target.id, interaction.user.id, reason, null, {
-  evidenceUrl: evidence || null,
-  punishment: punishment,
-  notes: note || null
+evidenceUrl: evidence || null,
+punishment: punishment,
+notes: note || null
 });
 
 const embed = caseEmbed(item);
 await sendLog(embed);
 
 return interaction.reply({ content: "Infraction created. Case #" + item.caseNumber, embeds: [embed] });
-
 }
 
 if (sub === "lookup") {
@@ -1103,7 +1121,6 @@ const item = await getInfractionCase(caseNumber);
 if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
 
 return interaction.reply({ embeds: [caseEmbed(item)] });
-
 }
 
 if (sub === "history") {
@@ -1116,19 +1133,18 @@ const status = interaction.options.getString("status") || "active";
 let rows;
 
 if (status === "all") {
-  rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION"]);
+rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION"]);
 } else {
-  rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION", status]);
+rows = await all("SELECT * FROM cases WHERE userId = ? AND type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", [target.id, "INFRACTION", status]);
 }
 
 const embed = new EmbedBuilder()
-  .setTitle("Infraction History for " + target.tag)
-  .setColor(0x2b2d31)
-  .setDescription(infractionListText(rows))
-  .setTimestamp();
+.setTitle("Infraction History for " + target.tag)
+.setColor(0x2b2d31)
+.setDescription(infractionListText(rows))
+.setTimestamp();
 
 return interaction.reply({ embeds: [embed] });
-
 }
 
 if (sub === "void") {
@@ -1150,7 +1166,6 @@ const embed = caseEmbed(updated);
 await sendLog(embed);
 
 return interaction.reply({ content: "Infraction #" + caseNumber + " has been voided.", embeds: [embed] });
-
 }
 
 if (sub === "edit") {
@@ -1167,8 +1182,8 @@ const item = await getInfractionCase(caseNumber);
 if (!item) return interaction.reply({ content: "Infraction not found.", ephemeral: true });
 
 await run(
-  "UPDATE cases SET reason = COALESCE(?, reason), punishment = COALESCE(?, punishment), evidenceUrl = COALESCE(?, evidenceUrl) WHERE caseNumber = ?",
-  [newReason, newType, newEvidence, caseNumber]
+"UPDATE cases SET reason = COALESCE(?, reason), punishment = COALESCE(?, punishment), evidenceUrl = COALESCE(?, evidenceUrl) WHERE caseNumber = ?",
+[newReason, newType, newEvidence, caseNumber]
 );
 
 const updated = await getInfractionCase(caseNumber);
@@ -1176,7 +1191,6 @@ const embed = caseEmbed(updated);
 await sendLog(embed);
 
 return interaction.reply({ content: "Infraction #" + caseNumber + " updated.", embeds: [embed] });
-
 }
 
 if (sub === "note") {
@@ -1199,7 +1213,6 @@ const updated = await getInfractionCase(caseNumber);
 const embed = caseEmbed(updated);
 
 return interaction.reply({ content: "Note added to infraction #" + caseNumber + ".", embeds: [embed] });
-
 }
 
 if (sub === "list") {
@@ -1211,19 +1224,18 @@ const status = interaction.options.getString("status") || "active";
 let rows;
 
 if (status === "all") {
-  rows = await all("SELECT * FROM cases WHERE type = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION"]);
+rows = await all("SELECT * FROM cases WHERE type = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION"]);
 } else {
-  rows = await all("SELECT * FROM cases WHERE type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION", status]);
+rows = await all("SELECT * FROM cases WHERE type = ? AND status = ? ORDER BY caseNumber DESC LIMIT 15", ["INFRACTION", status]);
 }
 
 const embed = new EmbedBuilder()
-  .setTitle("Recent Infractions")
-  .setColor(0x2b2d31)
-  .setDescription(infractionListText(rows))
-  .setTimestamp();
+.setTitle("Recent Infractions")
+.setColor(0x2b2d31)
+.setDescription(infractionListText(rows))
+.setTimestamp();
 
 return interaction.reply({ embeds: [embed] });
-
 }
 
 if (sub === "staff") {
@@ -1235,14 +1247,67 @@ const staffUser = interaction.options.getUser("user");
 const rows = await all("SELECT * FROM cases WHERE officerId = ? AND type = ? ORDER BY caseNumber DESC LIMIT 15", [staffUser.id, "INFRACTION"]);
 
 const embed = new EmbedBuilder()
-  .setTitle("Infractions Issued by " + staffUser.tag)
-  .setColor(0x2b2d31)
-  .setDescription(infractionListText(rows))
-  .setTimestamp();
+.setTitle("Infractions Issued by " + staffUser.tag)
+.setColor(0x2b2d31)
+.setDescription(infractionListText(rows))
+.setTimestamp();
 
 return interaction.reply({ embeds: [embed] });
-
 }
+}
+
+async function handlePromotion(interaction, member) {
+if (!hasLevel(member, "high", interaction)) {
+return interaction.reply({ content: "High Command or Discord Admin only.", ephemeral: true });
+}
+
+const target = interaction.options.getUser("user");
+const targetMember = await getTargetMember(interaction);
+const currentRank = interaction.options.getString("current_rank");
+const newRank = interaction.options.getString("new_rank");
+const reason = interaction.options.getString("reason");
+const evidence = interaction.options.getString("evidence");
+const note = interaction.options.getString("note");
+
+if (!canAct(member, targetMember, interaction)) {
+return interaction.reply({ content: "You cannot promote this user.", ephemeral: true });
+}
+
+const rankChange = "From: " + currentRank + "\nTo: " + newRank;
+
+const item = await createCase("PROMOTION", target.id, interaction.user.id, reason, null, {
+evidenceUrl: evidence || null,
+punishment: rankChange,
+notes: note || null
+});
+
+const embed = new EmbedBuilder()
+.setTitle("Promotion Case #" + item.caseNumber)
+.setColor(0x2ecc71)
+.addFields(
+{ name: "Promoted User", value: "<@" + target.id + ">", inline: true },
+{ name: "Promoted By", value: "<@" + interaction.user.id + ">", inline: true },
+{ name: "Previous Rank", value: currentRank, inline: true },
+{ name: "New Rank", value: newRank, inline: true },
+{ name: "Reason", value: reason, inline: false }
+)
+.setFooter({ text: "Sentinel Enforcement Authority Promotion System | Case #" + item.caseNumber })
+.setTimestamp();
+
+if (evidence) {
+embed.addFields({ name: "Evidence", value: evidence, inline: false });
+}
+
+if (note) {
+embed.addFields({ name: "Note", value: note, inline: false });
+}
+
+await sendLog(embed);
+
+return interaction.reply({
+content: "Promotion logged. Case #" + item.caseNumber,
+embeds: [embed]
+});
 }
 
 async function handleHelp(interaction) {
@@ -1264,6 +1329,7 @@ const embed = new EmbedBuilder()
 "/infract note - Add a note to an infraction",
 "/infract list - List recent infractions",
 "/infract staff - View infractions issued by staff",
+"/promote - Log a staff promotion",
 "/embed send - Send a custom embed",
 "/welcome set/off/test - Manage welcome messages",
 "/autorole add/remove/list - Manage auto roles",
@@ -1369,7 +1435,6 @@ return "<@&" + row.roleId + ">";
 }).join("\n");
 
 return interaction.reply({ content: list || "No auto roles set.", ephemeral: true });
-
 }
 }
 
@@ -1388,7 +1453,6 @@ await run("INSERT OR IGNORE INTO permission_roles (permission, roleId) VALUES (?
 await loadPermissions();
 
 return interaction.reply({ content: "Added " + role.toString() + " to " + permission + ".", ephemeral: true });
-
 }
 
 if (sub === "remove") {
@@ -1399,7 +1463,6 @@ await run("DELETE FROM permission_roles WHERE permission = ? AND roleId = ?", [p
 await loadPermissions();
 
 return interaction.reply({ content: "Removed " + role.toString() + " from " + permission + ".", ephemeral: true });
-
 }
 
 if (sub === "list") {
@@ -1407,17 +1470,16 @@ const rows = await all("SELECT permission, roleId FROM permission_roles ORDER BY
 let text = "";
 
 for (const key of ["staff", "mod", "admin", "high", "infract"]) {
-  const roles = rows.filter(function (row) {
-    return row.permission === key;
-  }).map(function (row) {
-    return "<@&" + row.roleId + ">";
-  });
+const roles = rows.filter(function (row) {
+return row.permission === key;
+}).map(function (row) {
+return "<@&" + row.roleId + ">";
+});
 
-  text += key.toUpperCase() + ": " + (roles.length ? roles.join(", ") : "None") + "\n";
+text += key.toUpperCase() + ": " + (roles.length ? roles.join(", ") : "None") + "\n";
 }
 
 return interaction.reply({ content: text, ephemeral: true });
-
 }
 }
 
@@ -1480,18 +1542,125 @@ if (!hasLevel(member, "staff", interaction)) {
 return interaction.reply({ content: "Staff only.", ephemeral: true });
 }
 
-const rows = await all("SELECT userId, SUM(minutes) as total FROM shifts GROUP BY userId ORDER BY total DESC LIMIT 10");
+await interaction.deferReply();
 
-if (!rows.length) return interaction.reply("No shift data yet.");
+try {
+await interaction.guild.members.fetch();
+} catch (error) {
+console.error("Could not fetch all members for leaderboard:", error);
+}
+
+const activeRows = await all("SELECT * FROM active_shifts");
+const activeMap = new Map();
+
+for (const row of activeRows) {
+activeMap.set(row.userId, row);
+}
+
+function canGoOnDuty(memberObj) {
+if (!memberObj) return false;
+if (memberObj.user.bot) return false;
+
+return (
+hasLevel(memberObj, "staff", null) ||
+hasLevel(memberObj, "mod", null) ||
+hasLevel(memberObj, "admin", null) ||
+hasLevel(memberObj, "high", null)
+);
+}
+
+const eligibleMembers = interaction.guild.members.cache
+.filter(function (m) {
+return canGoOnDuty(m);
+})
+.map(function (m) {
+const activeShift = activeMap.get(m.id);
+let currentMs = 0;
+let status = "Off Duty";
+
+if (activeShift) {
+if (activeShift.status === "break") {
+status = "On Break";
+} else {
+status = "On Shift";
+}
+
+currentMs = getShiftActiveMs(activeShift);
+}
+
+return {
+id: m.id,
+currentMs: currentMs,
+status: status
+};
+});
+
+if (!eligibleMembers.length) {
+return interaction.editReply({ content: "No eligible on-duty members found." });
+}
+
+eligibleMembers.sort(function (a, b) {
+return b.currentMs - a.currentMs;
+});
+
+const lines = eligibleMembers.map(function (entry, index) {
+let statusText = "";
+if (entry.status === "On Shift") statusText = " 🟢";
+if (entry.status === "On Break") statusText = " 🟡";
+
+return "**#" + (index + 1) + "** <@" + entry.id + "> — `" + formatLeaderboardTime(entry.currentMs) + "`" + statusText;
+});
+
+const chunks = [];
+let currentChunk = "";
+
+for (const line of lines) {
+if ((currentChunk + line + "\n").length > 3900) {
+chunks.push(currentChunk);
+currentChunk = "";
+}
+currentChunk += line + "\n";
+}
+
+if (currentChunk) chunks.push(currentChunk);
+
+const totalOnDuty = eligibleMembers.filter(function (x) {
+return x.status === "On Shift";
+}).length;
+
+const totalOnBreak = eligibleMembers.filter(function (x) {
+return x.status === "On Break";
+}).length;
+
+const totalEligible = eligibleMembers.length;
 
 const embed = new EmbedBuilder()
 .setTitle("Shift Leaderboard")
 .setColor(0x2b2d31)
-.setDescription(rows.map(function (row, index) {
-return "#" + (index + 1) + " <@" + row.userId + "> - " + row.total + " minutes";
-}).join("\n"));
+.setDescription(chunks[0] || "No data.")
+.addFields({
+name: "Shift Stats",
+value:
+"Eligible Staff: **" + totalEligible + "**\n" +
+"Currently On Shift: **" + totalOnDuty + "**\n" +
+"Currently On Break: **" + totalOnBreak + "**",
+inline: false
+})
+.setFooter({ text: "Sentinel Enforcement Authority Shift Leaderboard" })
+.setTimestamp();
 
-return interaction.reply({ embeds: [embed] });
+await interaction.editReply({ embeds: [embed] });
+
+for (let i = 1; i < chunks.length; i++) {
+const extraEmbed = new EmbedBuilder()
+.setTitle("Shift Leaderboard Continued")
+.setColor(0x2b2d31)
+.setDescription(chunks[i])
+.setFooter({ text: "Sentinel Enforcement Authority Shift Leaderboard" })
+.setTimestamp();
+
+await interaction.followUp({ embeds: [extraEmbed] });
+}
 }
 
 async function handleModeration(interaction, member, command) {
@@ -1527,7 +1696,6 @@ const item = await createCase("MUTE", target.id, interaction.user.id, reason, mi
 const embed = caseEmbed(item);
 await sendLog(embed);
 return interaction.reply({ content: "Muted " + target.tag + " for " + minutes + " minutes. Case #" + item.caseNumber, embeds: [embed] });
-
 }
 
 if (command === "unmute") {
@@ -1585,13 +1753,12 @@ await loadPermissions();
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 await rest.put(
-  Routes.applicationGuildCommands(client.user.id, GUILD_ID),
-  { body: commands }
+Routes.applicationGuildCommands(client.user.id, GUILD_ID),
+{ body: commands }
 );
 
 console.log("Logged in as " + client.user.tag);
 console.log("Commands deployed to guild " + GUILD_ID + " using this same bot.");
-
 } catch (error) {
 console.error("Startup error:", error);
 }
@@ -1620,20 +1787,19 @@ if (command === "shift") return await handleShift(interaction, member);
 if (command === "log") return await handleLog(interaction, member);
 if (command === "ticket") return await handleTicket(interaction, member);
 if (command === "infract") return await handleInfract(interaction, member);
+if (command === "promote") return await handlePromotion(interaction, member);
 if (command === "leaderboard") return await handleLeaderboard(interaction, member);
 if (command === "warn" || command === "kick" || command === "ban" || command === "mute" || command === "unmute") return await handleModeration(interaction, member, command);
 if (command === "case") return await handleCase(interaction, member);
 if (command === "history") return await handleHistory(interaction, member);
-
 } catch (error) {
 console.error("Interaction error:", error);
 
 if (!interaction.replied && !interaction.deferred) {
-  return interaction.reply({ content: "Error running command. Check Railway logs.", ephemeral: true });
+return interaction.reply({ content: "Error running command. Check Railway logs.", ephemeral: true });
 }
 
 return interaction.followUp({ content: "Error running command. Check Railway logs.", ephemeral: true });
-
 }
 });
 
