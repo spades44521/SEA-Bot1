@@ -70,8 +70,8 @@ async function setupDatabase() {
 await run("CREATE TABLE IF NOT EXISTS permission_roles (permission TEXT NOT NULL, roleId TEXT NOT NULL, UNIQUE(permission, roleId))");
 await run("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)");
 await run("CREATE TABLE IF NOT EXISTS autoroles (roleId TEXT PRIMARY KEY)");
-await run("CREATE TABLE IF NOT EXISTS cases (caseNumber INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, userId TEXT NOT NULL, officerId TEXT NOT NULL, reason TEXT NOT NULL, duration TEXT, createdAt INTEGER, arrestLocation TEXT, mugshotUrl TEXT)");
 
+await run("CREATE TABLE IF NOT EXISTS cases (caseNumber INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, userId TEXT NOT NULL, officerId TEXT NOT NULL, reason TEXT NOT NULL, duration TEXT, createdAt INTEGER, arrestLocation TEXT, mugshotUrl TEXT)");
 await addColumnIfMissing("cases", "duration", "TEXT");
 await addColumnIfMissing("cases", "createdAt", "INTEGER");
 await addColumnIfMissing("cases", "arrestLocation", "TEXT");
@@ -85,18 +85,15 @@ await addColumnIfMissing("cases", "punishment", "TEXT");
 await addColumnIfMissing("cases", "notes", "TEXT");
 
 await run("CREATE TABLE IF NOT EXISTS active_shifts (userId TEXT PRIMARY KEY, startedAt INTEGER NOT NULL, status TEXT DEFAULT 'active', breakStartedAt INTEGER, totalBreakMs INTEGER DEFAULT 0)");
-
 await addColumnIfMissing("active_shifts", "status", "TEXT DEFAULT 'active'");
 await addColumnIfMissing("active_shifts", "breakStartedAt", "INTEGER");
 await addColumnIfMissing("active_shifts", "totalBreakMs", "INTEGER DEFAULT 0");
 
 await run("CREATE TABLE IF NOT EXISTS shifts (id INTEGER PRIMARY KEY AUTOINCREMENT, userId TEXT NOT NULL, startedAt INTEGER, endedAt INTEGER, minutes INTEGER NOT NULL)");
-
 await addColumnIfMissing("shifts", "startedAt", "INTEGER");
 await addColumnIfMissing("shifts", "endedAt", "INTEGER");
 
 await run("CREATE TABLE IF NOT EXISTS shift_edits (id INTEGER PRIMARY KEY AUTOINCREMENT, userId TEXT NOT NULL, adminId TEXT NOT NULL, minutes INTEGER NOT NULL, reason TEXT, type TEXT, createdAt INTEGER NOT NULL)");
-
 await addColumnIfMissing("shift_edits", "adminId", "TEXT");
 await addColumnIfMissing("shift_edits", "minutes", "INTEGER DEFAULT 0");
 await addColumnIfMissing("shift_edits", "reason", "TEXT");
@@ -104,13 +101,11 @@ await addColumnIfMissing("shift_edits", "type", "TEXT");
 await addColumnIfMissing("shift_edits", "createdAt", "INTEGER");
 
 await run("CREATE TABLE IF NOT EXISTS shift_quotas (userId TEXT PRIMARY KEY, quotaMinutes INTEGER NOT NULL DEFAULT 0, updatedBy TEXT, updatedAt INTEGER)");
-
 await addColumnIfMissing("shift_quotas", "quotaMinutes", "INTEGER DEFAULT 0");
 await addColumnIfMissing("shift_quotas", "updatedBy", "TEXT");
 await addColumnIfMissing("shift_quotas", "updatedAt", "INTEGER");
 
 await run("CREATE TABLE IF NOT EXISTS tickets (channelId TEXT PRIMARY KEY, userId TEXT NOT NULL, claimedBy TEXT, status TEXT DEFAULT 'open', createdAt INTEGER NOT NULL, closedAt INTEGER)");
-
 await addColumnIfMissing("tickets", "claimedBy", "TEXT");
 await addColumnIfMissing("tickets", "status", "TEXT DEFAULT 'open'");
 await addColumnIfMissing("tickets", "createdAt", "INTEGER");
@@ -193,7 +188,9 @@ return sub.setName("add").setDescription("Add auto role").addRoleOption(function
 .addSubcommand(function (sub) {
 return sub.setName("remove").setDescription("Remove auto role").addRoleOption(function (o) { return o.setName("role").setDescription("Role").setRequired(true); });
 })
-.addSubcommand(function (sub) { return sub.setName("list").setDescription("List auto roles"); }),
+.addSubcommand(function (sub) {
+return sub.setName("list").setDescription("List auto roles");
+}),
 
 new SlashCommandBuilder()
 .setName("perm")
@@ -212,7 +209,9 @@ return sub
 .addStringOption(function (o) { return o.setName("permission").setDescription("Permission").setRequired(true).addChoices.apply(o, permissionChoices); })
 .addRoleOption(function (o) { return o.setName("role").setDescription("Role").setRequired(true); });
 })
-.addSubcommand(function (sub) { return sub.setName("list").setDescription("List permission roles"); }),
+.addSubcommand(function (sub) {
+return sub.setName("list").setDescription("List permission roles");
+}),
 
 new SlashCommandBuilder()
 .setName("config")
@@ -240,7 +239,7 @@ return sub
 .addSubcommand(function (sub) {
 return sub
 .setName("addtime")
-.setDescription("Admin+ add shift time to a user")
+.setDescription("Admin+ add all-time shift time")
 .addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
 .addIntegerOption(function (o) { return o.setName("minutes").setDescription("Minutes to add").setRequired(true).setMinValue(1).setMaxValue(100000); })
 .addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
@@ -248,7 +247,7 @@ return sub
 .addSubcommand(function (sub) {
 return sub
 .setName("removetime")
-.setDescription("Admin+ remove shift time from a user")
+.setDescription("Admin+ remove all-time shift time")
 .addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
 .addIntegerOption(function (o) { return o.setName("minutes").setDescription("Minutes to remove").setRequired(true).setMinValue(1).setMaxValue(100000); })
 .addStringOption(function (o) { return o.setName("reason").setDescription("Reason").setRequired(false).setMaxLength(1000); });
@@ -299,8 +298,12 @@ return sub
 .addRoleOption(function (o) { return o.setName("staff_role").setDescription("Role that can view and claim tickets").setRequired(true); })
 .addChannelOption(function (o) { return o.setName("logs").setDescription("Ticket logs channel").setRequired(true); });
 })
-.addSubcommand(function (sub) { return sub.setName("panel").setDescription("Send the ticket panel again"); })
-.addSubcommand(function (sub) { return sub.setName("close").setDescription("Close the current ticket"); })
+.addSubcommand(function (sub) {
+return sub.setName("panel").setDescription("Send the ticket panel again");
+})
+.addSubcommand(function (sub) {
+return sub.setName("close").setDescription("Close the current ticket");
+})
 .addSubcommand(function (sub) {
 return sub.setName("add").setDescription("Add a user to the current ticket").addUserOption(function (o) { return o.setName("user").setDescription("User to add").setRequired(true); });
 })
@@ -380,7 +383,7 @@ new SlashCommandBuilder()
 .addStringOption(function (o) { return o.setName("evidence").setDescription("Evidence URL").setRequired(false).setMaxLength(1000); })
 .addStringOption(function (o) { return o.setName("note").setDescription("Extra note").setRequired(false).setMaxLength(1000); }),
 
-new SlashCommandBuilder().setName("leaderboard").setDescription("View shift leaderboard"),
+new SlashCommandBuilder().setName("leaderboard").setDescription("View all-time shift leaderboard"),
 
 new SlashCommandBuilder().setName("warn").setDescription("Warn a user")
 .addUserOption(function (o) { return o.setName("user").setDescription("User").setRequired(true); })
@@ -519,15 +522,11 @@ return await all("SELECT roleId FROM autoroles");
 async function addAutoRole(roleId) {
 const existing = await get("SELECT roleId FROM autoroles WHERE roleId = ?", [roleId]);
 
-if (existing) {
-return { ok: true, message: "That role is already an auto-role." };
-}
+if (existing) return { ok: true, message: "That role is already an auto-role." };
 
 const roles = await getAutoRoles();
 
-if (roles.length >= 5) {
-return { ok: false, message: "Max 5 auto roles." };
-}
+if (roles.length >= 5) return { ok: false, message: "Max 5 auto roles." };
 
 await run("INSERT INTO autoroles (roleId) VALUES (?)", [roleId]);
 return { ok: true, message: "Auto-role saved." };
@@ -586,17 +585,19 @@ const embed = new EmbedBuilder()
 .setFooter({ text: "Case Number: " + item.caseNumber })
 .setTimestamp(item.createdAt ? new Date(Number(item.createdAt)) : new Date());
 
-if (item.punishment) embed.addFields({ name: "Infraction Type", value: item.punishment, inline: true });
+if (item.punishment) embed.addFields({ name: "Extra", value: item.punishment, inline: false });
 if (item.duration) embed.addFields({ name: "Duration", value: item.duration, inline: true });
 if (item.evidenceUrl) embed.addFields({ name: "Evidence", value: item.evidenceUrl, inline: false });
 if (item.notes) embed.addFields({ name: "Notes", value: item.notes, inline: false });
 if (item.arrestLocation) embed.addFields({ name: "Arrest Location", value: item.arrestLocation, inline: false });
+
 if (status === "voided") {
 embed.addFields(
 { name: "Voided By", value: item.voidedBy ? "<@" + item.voidedBy + ">" : "Unknown", inline: true },
 { name: "Void Reason", value: item.voidReason || "No reason", inline: false }
 );
 }
+
 if (item.mugshotUrl) embed.setImage(item.mugshotUrl);
 
 return embed;
@@ -610,7 +611,7 @@ const channel = await client.channels.fetch(channelId).catch(function () {
 return null;
 });
 
-if (!channel) return;
+if (!channel || !channel.isTextBased()) return;
 
 await channel.send({ embeds: [embed] }).catch(function () {});
 }
@@ -1201,10 +1202,6 @@ if (interaction.customId === "ticket_claim") return await claimTicket(interactio
 if (interaction.customId === "ticket_close") return await closeTicket(interaction);
 }
 
-function isInfractionCase(item) {
-return item && item.type === "INFRACTION";
-}
-
 async function getInfractionCase(caseNumber) {
 return await get("SELECT * FROM cases WHERE caseNumber = ? AND type = ?", [caseNumber, "INFRACTION"]);
 }
@@ -1434,13 +1431,8 @@ const embed = new EmbedBuilder()
 .setFooter({ text: "Sentinel Enforcement Authority Promotion System | Case #" + item.caseNumber })
 .setTimestamp();
 
-if (evidence) {
-embed.addFields({ name: "Evidence", value: evidence, inline: false });
-}
-
-if (note) {
-embed.addFields({ name: "Note", value: note, inline: false });
-}
+if (evidence) embed.addFields({ name: "Evidence", value: evidence, inline: false });
+if (note) embed.addFields({ name: "Note", value: note, inline: false });
 
 await sendLog(embed);
 
@@ -1458,8 +1450,8 @@ const embed = new EmbedBuilder()
 "/help - Show commands",
 "/shift manage - Open shift panel",
 "/shift forceoff - Admin+ force a user off shift",
-"/shift addtime - Admin+ add shift time",
-"/shift removetime - Admin+ remove shift time",
+"/shift addtime - Admin+ add all-time shift time",
+"/shift removetime - Admin+ remove all-time shift time",
 "/shift quota - Admin+ set default/user quota",
 "/shift view - Admin+ view shift stats",
 "/shift reset - Admin+ reset shift data",
@@ -1480,7 +1472,7 @@ const embed = new EmbedBuilder()
 "/welcome set/off/test - Manage welcome messages",
 "/autorole add/remove/list - Manage auto roles",
 "/log arrest - Log an arrest",
-"/leaderboard - Shift leaderboard",
+"/leaderboard - All-time shift leaderboard",
 "/warn - Warn a user",
 "/kick - Kick user",
 "/ban - Ban user",
@@ -1565,7 +1557,7 @@ const sub = interaction.options.getSubcommand();
 if (sub === "add") {
 const role = interaction.options.getRole("role");
 const result = await addAutoRole(role.id);
-return interaction.reply({ content: result.message + " Automatic join roles need Server Members Intent later.", ephemeral: true });
+return interaction.reply({ content: result.message, ephemeral: true });
 }
 
 if (sub === "remove") {
@@ -1708,12 +1700,12 @@ const reason = interaction.options.getString("reason") || "No reason";
 
 await logShiftEdit(user.id, interaction.user.id, minutes, "add", reason);
 
-const embed = await shiftEditLog("Shift Time Added", user.id, interaction.user.id, [
+const embed = await shiftEditLog("All-Time Shift Time Added", user.id, interaction.user.id, [
 { name: "Added Time", value: formatMinutes(minutes), inline: true },
 { name: "Reason", value: reason, inline: false }
 ]);
 
-return interaction.reply({ content: "Added " + formatMinutes(minutes) + " to <@" + user.id + ">.", embeds: [embed] });
+return interaction.reply({ content: "Added " + formatMinutes(minutes) + " to <@" + user.id + ">'s all-time leaderboard total.", embeds: [embed] });
 }
 
 if (sub === "removetime") {
@@ -1723,12 +1715,12 @@ const reason = interaction.options.getString("reason") || "No reason";
 
 await logShiftEdit(user.id, interaction.user.id, -minutes, "remove", reason);
 
-const embed = await shiftEditLog("Shift Time Removed", user.id, interaction.user.id, [
+const embed = await shiftEditLog("All-Time Shift Time Removed", user.id, interaction.user.id, [
 { name: "Removed Time", value: formatMinutes(minutes), inline: true },
 { name: "Reason", value: reason, inline: false }
 ]);
 
-return interaction.reply({ content: "Removed " + formatMinutes(minutes) + " from <@" + user.id + ">.", embeds: [embed] });
+return interaction.reply({ content: "Removed " + formatMinutes(minutes) + " from <@" + user.id + ">'s all-time leaderboard total.", embeds: [embed] });
 }
 
 if (sub === "quota") {
@@ -1779,8 +1771,8 @@ const embed = new EmbedBuilder()
 .setColor(0x2b2d31)
 .addFields(
 { name: "Status", value: status, inline: true },
-{ name: "Total Logged", value: formatMinutes(stats.totalMinutes), inline: true },
-{ name: "Active Shift Time", value: formatMinutes(stats.activeMinutes), inline: true },
+{ name: "All-Time Total", value: formatMinutes(stats.totalMinutes), inline: true },
+{ name: "Current Active Time", value: formatMinutes(stats.activeMinutes), inline: true },
 { name: "Quota", value: formatMinutes(stats.quotaMinutes), inline: true },
 { name: "Remaining", value: formatMinutes(stats.remainingMinutes), inline: true },
 { name: "Completed Shifts", value: String(stats.shiftCount), inline: true },
@@ -1844,10 +1836,23 @@ console.error("Could not fetch all members for leaderboard:", error);
 }
 
 const activeRows = await all("SELECT * FROM active_shifts");
+const completedRows = await all("SELECT userId, SUM(minutes) as totalMinutes FROM shifts GROUP BY userId");
+const editRows = await all("SELECT userId, SUM(minutes) as editMinutes FROM shift_edits GROUP BY userId");
+
 const activeMap = new Map();
+const completedMap = new Map();
+const editMap = new Map();
 
 for (const row of activeRows) {
 activeMap.set(row.userId, row);
+}
+
+for (const row of completedRows) {
+completedMap.set(row.userId, Number(row.totalMinutes || 0));
+}
+
+for (const row of editRows) {
+editMap.set(row.userId, Number(row.editMinutes || 0));
 }
 
 function canGoOnDuty(memberObj) {
@@ -1868,22 +1873,23 @@ return canGoOnDuty(m);
 })
 .map(function (m) {
 const activeShift = activeMap.get(m.id);
-let currentMs = 0;
+const completedMinutes = completedMap.get(m.id) || 0;
+const editMinutes = editMap.get(m.id) || 0;
+const totalMinutes = Math.max(0, completedMinutes + editMinutes);
+const totalMs = totalMinutes * 60000;
+
 let status = "Off Duty";
 
 if (activeShift) {
-if (activeShift.status === "break") {
-status = "On Break";
-} else {
-status = "On Shift";
-}
-
-currentMs = getShiftActiveMs(activeShift);
+status = activeShift.status === "break" ? "On Break" : "On Shift";
 }
 
 return {
 id: m.id,
-currentMs: currentMs,
+totalMinutes: totalMinutes,
+totalMs: totalMs,
+completedMinutes: completedMinutes,
+editMinutes: editMinutes,
 status: status
 };
 });
@@ -1893,7 +1899,7 @@ return interaction.editReply({ content: "No eligible on-duty members found." });
 }
 
 eligibleMembers.sort(function (a, b) {
-return b.currentMs - a.currentMs;
+return b.totalMs - a.totalMs;
 });
 
 const lines = eligibleMembers.map(function (entry, index) {
@@ -1901,7 +1907,11 @@ let statusText = "";
 if (entry.status === "On Shift") statusText = " 🟢";
 if (entry.status === "On Break") statusText = " 🟡";
 
-return "**#" + (index + 1) + "** <@" + entry.id + "> — `" + formatLeaderboardTime(entry.currentMs) + "`" + statusText;
+let editText = "";
+if (entry.editMinutes > 0) editText = " `+" + formatMinutes(entry.editMinutes) + "`";
+if (entry.editMinutes < 0) editText = " `-" + formatMinutes(Math.abs(entry.editMinutes)) + "`";
+
+return "**#" + (index + 1) + "** <@" + entry.id + "> — `" + formatLeaderboardTime(entry.totalMs) + "`" + statusText + editText;
 });
 
 const chunks = [];
@@ -1928,7 +1938,7 @@ return x.status === "On Break";
 const totalEligible = eligibleMembers.length;
 
 const embed = new EmbedBuilder()
-.setTitle("Shift Leaderboard")
+.setTitle("All-Time Shift Leaderboard")
 .setColor(0x2b2d31)
 .setDescription(chunks[0] || "No data.")
 .addFields({
@@ -1936,20 +1946,21 @@ name: "Shift Stats",
 value:
 "Eligible Staff: **" + totalEligible + "**\n" +
 "Currently On Shift: **" + totalOnDuty + "**\n" +
-"Currently On Break: **" + totalOnBreak + "**",
+"Currently On Break: **" + totalOnBreak + "**\n" +
+"Counting: **completed shifts + added time - removed time**",
 inline: false
 })
-.setFooter({ text: "Sentinel Enforcement Authority Shift Leaderboard" })
+.setFooter({ text: "Sentinel Enforcement Authority All-Time Shift Leaderboard" })
 .setTimestamp();
 
 await interaction.editReply({ embeds: [embed] });
 
 for (let i = 1; i < chunks.length; i++) {
 const extraEmbed = new EmbedBuilder()
-.setTitle("Shift Leaderboard Continued")
+.setTitle("All-Time Shift Leaderboard Continued")
 .setColor(0x2b2d31)
 .setDescription(chunks[i])
-.setFooter({ text: "Sentinel Enforcement Authority Shift Leaderboard" })
+.setFooter({ text: "Sentinel Enforcement Authority All-Time Shift Leaderboard" })
 .setTimestamp();
 
 await interaction.followUp({ embeds: [extraEmbed] });
@@ -2054,6 +2065,20 @@ console.log("Logged in as " + client.user.tag);
 console.log("Commands deployed to guild " + GUILD_ID + " using this same bot.");
 } catch (error) {
 console.error("Startup error:", error);
+}
+});
+
+client.on("guildMemberAdd", async function (member) {
+try {
+const rows = await getAutoRoles();
+
+for (const row of rows) {
+await member.roles.add(row.roleId).catch(function () {});
+}
+
+await sendWelcome(member);
+} catch (error) {
+console.error("Guild member add error:", error);
 }
 });
 
